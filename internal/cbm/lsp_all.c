@@ -17,3 +17,5 @@
 #include "lsp/ts_lsp.c"
 #include "lsp/cs_lsp.c"
 #include "lsp/generated/cs_stdlib_data.c"
+#include "lsp/java_lsp.c"
+#include "lsp/generated/java_stdlib_data.c"

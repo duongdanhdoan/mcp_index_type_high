@@ -9,6 +9,7 @@
 #include "lsp/py_lsp.h"
 #include "lsp/ts_lsp.h"
 #include "lsp/cs_lsp.h"
+#include "lsp/java_lsp.h"
 #include "preprocessor.h"
 #include "foundation/compat.h"
 #include "tree_sitter/api.h" // TSParser, TSNode, TSTree, TSInput, TSLanguage, TSPoint, TSParseOptions, TSParseState
@@ -502,6 +503,9 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
         if (language == CBM_LANG_CSHARP) {
             cbm_run_cs_lsp(a, result, source, source_len, root);
         }
+    }
+    if (language == CBM_LANG_JAVA) {
+        cbm_run_java_lsp(a, result, source, source_len, root);
     }
     atomic_fetch_add(&total_lsp_ns, now_ns() - lsp_start);
 
