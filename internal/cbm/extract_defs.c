@@ -26,6 +26,7 @@ enum {
     DECLARATOR_DEPTH_LIMIT = CBM_DECLARATOR_DEPTH_LIMIT, // shared define in helpers.h
 
     EXPORT_ANCESTOR_DEPTH = 4,
+    FUNC_PARENT_CLIMB_LIMIT = 4, /* fun_expr -> term -> uni_term -> let_binding (Nickel) */
     DECORATOR_SCAN_LIMIT = 3,
     C_RETURN_WALK_DEPTH = 5,
     VAR_RECURSION_LIMIT = 8,
@@ -741,6 +742,27 @@ TSNode cbm_resolve_func_name(TSNode node, CBMLanguage lang) {
                 if (!ts_node_is_null(pat)) {
                     return pat;
                 }
+            }
+        }
+
+        /* Nickel: the lambda is a `fun_expr` with no name; the binding name is on
+         * the enclosing let_binding's `pat` field (a `pattern` wrapping an `ident`).
+         * Resolving via the parent keeps anonymous lambdas (e.g. `map (fun x => x)
+         * xs`), whose parent is not a let_binding, out of func_types. */
+        if (lang == CBM_LANG_NICKEL && strcmp(kind, "fun_expr") == 0) {
+            TSNode parent = ts_node_parent(node);
+            /* let_binding wraps the bound term in a `term`/`uni_term` chain, so the
+             * fun_expr's immediate parent is not the let_binding directly. */
+            for (int up = 0; up < FUNC_PARENT_CLIMB_LIMIT && !ts_node_is_null(parent); up++) {
+                if (strcmp(ts_node_type(parent), "let_binding") == 0) {
+                    TSNode pat = ts_node_child_by_field_name(parent, TS_FIELD("pat"));
+                    if (!ts_node_is_null(pat)) {
+                        TSNode inner = ts_node_child_by_field_name(pat, TS_FIELD("pat"));
+                        return ts_node_is_null(inner) ? pat : inner;
+                    }
+                    break;
+                }
+                parent = ts_node_parent(parent);
             }
         }
 

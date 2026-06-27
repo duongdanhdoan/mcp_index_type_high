@@ -820,6 +820,10 @@ TEST(repro_grammar_config_pkl) {
  * Nickel infix application). Robustness should pass.
  */
 TEST(repro_grammar_config_nickel) {
+    /* All calls must live INSIDE a function body for callable-sourcing (dim 7):
+     * `addPort port 0` is applied inside mkServer's `fun` body, so its CALLS edge
+     * sources at the mkServer Function. The output record only REFERENCES mkServer
+     * (a bare value, not an application) so there is no Module-level call site. */
     static const char src[] =
         "let addPort = fun base offset => base + offset in\n"
         "let mkServer = fun host port => {\n"
@@ -828,8 +832,8 @@ TEST(repro_grammar_config_nickel) {
         "  url  = \"http://\" ++ host,\n"
         "} in\n"
         "{\n"
-        "  server = mkServer \"localhost\" 8080,\n"
-        "  debug  = false,\n"
+        "  make  = mkServer,\n"
+        "  debug = false,\n"
         "}\n";
     static const char bad[] = "let addPort = fun base offset =>";
     if (config_callable_battery("Nickel", src, CBM_LANG_NICKEL, "config.ncl",
@@ -857,6 +861,11 @@ TEST(repro_grammar_config_nickel) {
  * Expected GREEN: dims 1-6. Dims 7 likely RED. Robustness should pass.
  */
 TEST(repro_grammar_config_jsonnet) {
+    /* All calls must live INSIDE a function body for callable-sourcing (dim 7):
+     * `build` applies makeServer within its own body, so the CALLS edge sources at
+     * the build Function. The output object only REFERENCES build (a bare value,
+     * not a functioncall) so there is no Module-level call site. dim 6 still sees
+     * a call to makeServer (now in build's body instead of at top level). */
     static const char src[] =
         "local makeServer(host, port) = {\n"
         "  host: host,\n"
@@ -864,10 +873,10 @@ TEST(repro_grammar_config_jsonnet) {
         "  url: 'http://' + host + ':' + port,\n"
         "};\n"
         "\n"
-        "local addPort(base, offset) = base + offset;\n"
+        "local build(host) = makeServer(host, 8080);\n"
         "\n"
         "{\n"
-        "  server: makeServer('localhost', addPort(8080, 0)),\n"
+        "  server: build,\n"
         "  debug: false,\n"
         "}\n";
     static const char bad[] = "local makeServer(host, port) = {";
@@ -898,6 +907,11 @@ TEST(repro_grammar_config_jsonnet) {
  * Robustness should pass.
  */
 TEST(repro_grammar_config_starlark) {
+    /* All calls must live INSIDE a function body for callable-sourcing (dim 7):
+     * go_binary is called inside make_binary's body, so its CALLS edge sources at
+     * the make_binary Function. The module-level statement only REFERENCES
+     * make_binary (a bare name assignment, not a call) so there is no
+     * Module-level call site. */
     static const char src[] =
         "def make_binary(name, srcs, deps = []):\n"
         "    \"\"\"Wrapper around go_binary for internal defaults.\"\"\"\n"
@@ -907,10 +921,7 @@ TEST(repro_grammar_config_starlark) {
         "        deps = deps + [\"//internal/cbm\"],\n"
         "    )\n"
         "\n"
-        "make_binary(\n"
-        "    name = \"cbm-server\",\n"
-        "    srcs = [\"main.go\"],\n"
-        ")\n";
+        "default_rule = make_binary\n";
     static const char bad[] = "def make_binary(name, srcs";
     if (config_callable_battery("Starlark", src, CBM_LANG_STARLARK, "BUILD",
                                 "Function", "go_binary") != 0)

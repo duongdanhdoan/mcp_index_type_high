@@ -708,6 +708,49 @@ static char *extract_jsonnet_callee(CBMArena *a, TSNode node, const char *source
     return ts_node_is_null(id) ? NULL : cbm_node_text(a, id, source);
 }
 
+// Nickel: function application is `applicative` and curries left-associatively:
+// `f x y` parses as `(applicative t1:(applicative t1:f t2:x) t2:y)`. A real call
+// node carries a `t2` (argument) field; a bare value (`applicative
+// (record_operand (atom (ident))))` wraps every expression and has no `t2`, so it
+// is NOT a call. We also skip applicatives whose parent is itself an applicative
+// (the inner partial-application nodes) so a curried call emits exactly one edge,
+// keyed on the leftmost ident reached by descending the `t1` chain.
+// (`infix_expr` is binary operator application, not a call, and is excluded from
+// nickel_call_types.)
+static char *extract_nickel_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
+    if (strcmp(nk, "applicative") != 0) {
+        return NULL;
+    }
+    // Not an application unless it has an argument (`t2`).
+    if (ts_node_is_null(ts_node_child_by_field_name(node, TS_FIELD("t2")))) {
+        return NULL;
+    }
+    // Emit only at the outermost applicative of a curried chain.
+    TSNode parent = ts_node_parent(node);
+    if (!ts_node_is_null(parent) && strcmp(ts_node_type(parent), "applicative") == 0) {
+        return NULL;
+    }
+    enum { NICKEL_APPLY_DEPTH = 8 };
+    TSNode cur = node;
+    for (int depth = 0; depth < NICKEL_APPLY_DEPTH && !ts_node_is_null(cur); depth++) {
+        const char *ck = ts_node_type(cur);
+        if (strcmp(ck, "ident") == 0) {
+            return cbm_node_text(a, cur, source);
+        }
+        // Descend the function side: the `t1` field for curried applicatives, or
+        // the wrapper's first named child (record_operand -> atom -> ident).
+        TSNode next = ts_node_child_by_field_name(cur, TS_FIELD("t1"));
+        if (ts_node_is_null(next) && ts_node_named_child_count(cur) > 0) {
+            next = ts_node_named_child(cur, 0);
+        }
+        if (ts_node_is_null(next) || ts_node_eq(next, cur)) {
+            break;
+        }
+        cur = next;
+    }
+    return NULL;
+}
+
 // Typst: a `call` node's callee is its `item` field (an ident), matching the
 // def-side resolution of `#let greet(name) = ...`.
 static char *extract_typst_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
@@ -734,6 +777,10 @@ static char *extract_callee_lang_specific(CBMArena *a, TSNode node, const char *
 
     if (lang == CBM_LANG_JSONNET) {
         char *c = extract_jsonnet_callee(a, node, source, nk);
+        return c ? c : extract_scripting_callee(a, node, source, lang, nk);
+    }
+    if (lang == CBM_LANG_NICKEL) {
+        char *c = extract_nickel_callee(a, node, source, nk);
         return c ? c : extract_scripting_callee(a, node, source, lang, nk);
     }
     if (lang == CBM_LANG_TYPST) {

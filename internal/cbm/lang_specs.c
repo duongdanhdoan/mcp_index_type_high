@@ -1160,8 +1160,13 @@ static const char *purescript_import_types[] = {"import", "import_item", "instan
 static const char *purescript_branch_types[] = {"exp_if", "exp_case", "exp_do", NULL};
 static const char *purescript_var_types[] = {"signature", NULL};
 static const char *purescript_module_types[] = {"module", NULL};
-static const char *nickel_func_types[] = {"fun", NULL};
-static const char *nickel_call_types[] = {"infix_expr", NULL};
+/* The lambda node is `fun_expr` (the bare `fun` is only the keyword token, never
+ * a named node); its name lives on the enclosing let_binding's `pat` field, so
+ * cbm_resolve_func_name climbs to the parent for naming. A function application
+ * (`f x y`) is an `applicative` node — `infix_expr` is binary-operator
+ * application (`a + b`), not a call. */
+static const char *nickel_func_types[] = {"fun_expr", NULL};
+static const char *nickel_call_types[] = {"applicative", NULL};
 static const char *nickel_import_types[] = {"import", "include", NULL};
 static const char *nickel_branch_types[] = {"if", "match", NULL};
 static const char *nickel_var_types[] = {"let", NULL};
