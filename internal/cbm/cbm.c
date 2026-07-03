@@ -439,6 +439,77 @@ static bool is_alloc_name(const char *n) {
     return name_in_set(n, set);
 }
 
+// Extract the receiver identifier from a def's receiver text — Go's
+// "(s *Store)" / "(s Store)" → "s". Stores the identifier start in *out and
+// returns its length; returns 0 for unnamed receivers ("(*Store)", "(Store)"),
+// where no second token follows the identifier (a lone token is the TYPE, not
+// a name — such methods have no receiver variable to call through anyway).
+static size_t receiver_ident(const char *recv_text, const char **out) {
+    const char *p = recv_text;
+    if (*p == '(') {
+        p++;
+    }
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    const char *start = p;
+    while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
+           *p == '_') {
+        p++;
+    }
+    size_t len = (size_t)(p - start);
+    if (len == 0) {
+        return 0; // "(*Store)": leading '*', no identifier
+    }
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == ')' || *p == '\0') {
+        return 0; // "(Store)": single token is the type, receiver unnamed
+    }
+    *out = start;
+    return len;
+}
+
+// Whether a callee expression targets the same instance/class as the enclosing
+// def, i.e. counts as genuine self-recursion rather than a same-named call on a
+// different receiver. callee_name may be bare ("recur") or qualified
+// ("self.recur", "this.recur", "super().save", "axios.get", "self.obj.recur").
+//
+// Bare names have no receiver → assume self-call (free function calling itself
+// by bare name; preserves prior behavior). Qualified names: the receiver chain
+// is everything before the LAST '.', and the WHOLE chain must name the same
+// object — self/this/cls/@self, or the enclosing def's own receiver identifier
+// (Go: `s` in `func (s *Store) save()`, from CBMDefinition.receiver). Matching
+// the whole chain (not its first segment) keeps self.obj.recur() out: it
+// targets self's FIELD obj, a different object. super() is the parent class and
+// any other receiver (axios, console, ...) a different target. See #599.
+static bool is_self_receiver(const char *callee_name, const char *def_receiver) {
+    if (!callee_name || !callee_name[0]) {
+        return false;
+    }
+    const char *dot = strrchr(callee_name, '.');
+    if (!dot) {
+        return true; // bare name → self-recursion candidate
+    }
+    size_t rlen = (size_t)(dot - callee_name);
+    static const char *const self_receivers[] = {"self", "this", "cls", "@self", NULL};
+    for (int i = 0; self_receivers[i]; i++) {
+        size_t sl = strlen(self_receivers[i]);
+        if (rlen == sl && strncmp(callee_name, self_receivers[i], sl) == 0) {
+            return true;
+        }
+    }
+    if (def_receiver) {
+        const char *rid = NULL;
+        size_t ril = receiver_ident(def_receiver, &rid);
+        if (ril > 0 && ril == rlen && strncmp(callee_name, rid, ril) == 0) {
+            return true; // call through the enclosing method's own receiver
+        }
+    }
+    return false; // super() / axios / console / self.obj / any other receiver
+}
+
 // Count parameters from a signature string like "(int a, Foo* b, cb (*)(int,int))".
 // Fallback for languages where param_names isn't populated (e.g. C keeps only the
 // signature text). Counts commas at the top paren level; treats "()"/"(void)" as 0.
@@ -772,12 +843,16 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
             continue;
         }
         CBMDefinition *d = &result->defs.items[best];
-        // callee_name may be bare ("recur") or qualified ("pkg.recur", "self.recur")
+        // callee_name may be bare ("recur") or qualified ("self.recur",
+        // "super().save", "axios.get"). A short-name match alone is not
+        // self-recursion: the callee must also target the same object
+        // (is_self_receiver), or super().save() inside save and axios.get
+        // inside get are false positives (#599).
         const char *dot = strrchr(c->callee_name, '.');
         const char *callee_short = dot ? dot + 1 : c->callee_name;
         bool in_loop = c->loop_depth > 0;
 
-        if (strcmp(callee_short, d->name) == 0) {
+        if (strcmp(callee_short, d->name) == 0 && is_self_receiver(c->callee_name, d->receiver)) {
             // Direct self-recursion. The call graph omits self-edges (pass_calls
             // skips source==target), so detect it here; seeds "recursive".
             d->is_recursive = true;
