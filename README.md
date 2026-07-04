@@ -365,10 +365,52 @@ paru -S codebase-memory-mcp-bin
 
 The `codebase-memory-mcp-bin` package is available at: https://aur.archlinux.org/packages/codebase-memory-mcp-bin
 
-### Install via Claude Code
+### Install into Claude Code
 
-```
+You can install this MCP server directly into Claude Code from the GitHub repository:
+
+```text
 You: "Install this MCP server: https://github.com/duongdanhdoan/mcp_index_type_high"
+```
+
+Or install from a local clone/source build:
+
+```bash
+git clone https://github.com/duongdanhdoan/mcp_index_type_high.git
+cd mcp_index_type_high
+scripts/build.sh
+./build/c/codebase-memory-mcp install -y
+```
+
+The install command auto-configures Claude Code MCP files and helper hooks, including:
+
+- `~/.claude/.mcp.json`
+- `~/.claude.json`
+- Claude Code skills/instructions for using `codebase-memory-mcp`
+- non-blocking discovery hooks that help Claude prefer graph search before broad file search
+
+After installing:
+
+1. Restart Claude Code.
+2. Run `/mcp` and confirm `codebase-memory-mcp` is connected.
+3. In your project, ask Claude: `Index this project`.
+4. Then ask structural questions such as:
+   - `What is the architecture of this repo?`
+   - `Find the main Dart indexing code.`
+   - `Who calls this function?`
+   - `What files are impacted by my current git diff?`
+
+If Claude Code does not show the MCP server, confirm the binary exists and is executable:
+
+```bash
+which codebase-memory-mcp
+codebase-memory-mcp --version
+```
+
+Then rerun:
+
+```bash
+codebase-memory-mcp install -y
 ```
 
 ### Build from Source

@@ -19,7 +19,9 @@
       "Bash(make -f Makefile.cbm checkpoint)",
       "Bash(make -f Makefile.cbm cbm)",
       "Bash(./build/c/codebase-memory-mcp install *)",
-      "Bash(gh repo *)"
+      "Bash(gh repo *)",
+      "Bash(codebase-memory-mcp --version)",
+      "Read(//Users/doan/.claude/**)"
     ]
   }
 }
