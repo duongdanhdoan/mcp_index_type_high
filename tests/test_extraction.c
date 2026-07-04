@@ -1169,6 +1169,35 @@ TEST(dart_top_level_function) {
     PASS();
 }
 
+TEST(dart_top_level_call) {
+    CBMFileResult *r = extract("void helper() {\n  print('helper');\n}\n\n"
+                               "void run() {\n  helper();\n}\n",
+                               CBM_LANG_DART, "t", "main.dart");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_call(r, "helper"));
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(dart_same_class_method_call) {
+    CBMFileResult *r = extract("class Calculator {\n"
+                               "  int add(int a, int b) {\n"
+                               "    return a + b;\n"
+                               "  }\n"
+                               "\n"
+                               "  int compute(int x) {\n"
+                               "    return add(x, 1);\n"
+                               "  }\n"
+                               "}\n",
+                               CBM_LANG_DART, "t", "calc.dart");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_call(r, "add"));
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- Rust enum --- */
 TEST(rust_enum) {
     CBMFileResult *r =
@@ -3372,6 +3401,8 @@ SUITE(extraction) {
     RUN_TEST(objc_interface);
     RUN_TEST(objc_implementation);
     RUN_TEST(dart_top_level_function);
+    RUN_TEST(dart_top_level_call);
+    RUN_TEST(dart_same_class_method_call);
     RUN_TEST(rust_enum);
     RUN_TEST(zig_struct);
     RUN_TEST(cpp_function);

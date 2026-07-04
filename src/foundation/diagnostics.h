@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stddef.h>
 
 /* Global query stats — updated by the MCP server on each tool call. */
 typedef struct {
@@ -24,6 +25,13 @@ extern cbm_query_stats_t g_query_stats;
 
 /* Record a completed tool call. */
 void cbm_diag_record_query(long long duration_us, bool is_error);
+
+/* Opt-in MCP usage sidecar log. When CBM_MCP_USAGE_LOG=1/true, appends JSONL
+ * to CBM_MCP_USAGE_LOG_PATH, or ~/Desktop/log/codebase-memory-mcp/mcp-usage.jsonl
+ * by default. Best-effort: failures never affect MCP responses. */
+bool cbm_mcp_usage_log_enabled(void);
+size_t cbm_mcp_usage_log_preview_bytes(void);
+void cbm_mcp_usage_log_append(const char *json_line);
 
 /* Start the diagnostics writer thread (if CBM_DIAGNOSTICS env is set).
  * Call once from main(). Returns true if started. */

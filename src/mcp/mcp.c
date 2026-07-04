@@ -5842,11 +5842,349 @@ static char *inject_update_notice(cbm_mcp_server_t *srv, char *result_json) {
     return result_json;
 }
 
+/* ── MCP usage sidecar logging ────────────────────────────────── */
+
+static bool mcp_usage_key_is_secret(const char *key) {
+    return key && (cbm_strcasestr(key, "token") || cbm_strcasestr(key, "secret") ||
+                   cbm_strcasestr(key, "password") || cbm_strcasestr(key, "authorization"));
+}
+
+static bool mcp_usage_key_is_allowed(const char *key) {
+    static const char *allowed[] = {"project",        "project_name", "query",
+                                    "name_pattern",   "qn_pattern",   "qualified_name",
+                                    "function_name",  "label",        "relationship",
+                                    "mode",           "depth",        "limit",
+                                    "offset",         "direction",    "path",
+                                    "file_pattern",   "path_filter",  "since",
+                                    "base_branch",    "repo_path",    "persistence"};
+    if (!key) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+        if (strcmp(key, allowed[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void mcp_usage_obj_add_keycopy(yyjson_mut_doc *doc, yyjson_mut_val *obj,
+                                      const char *key, yyjson_mut_val *val) {
+    if (!doc || !obj || !key || !val) {
+        return;
+    }
+    yyjson_mut_obj_add(obj, yyjson_mut_strcpy(doc, key), val);
+}
+
+static void mcp_usage_add_capped_string(yyjson_mut_doc *doc, yyjson_mut_val *obj,
+                                        const char *key, const char *value,
+                                        size_t preview_bytes) {
+    if (!value) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_null(doc));
+        return;
+    }
+    size_t len = strlen(value);
+    if (len <= preview_bytes) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_strcpy(doc, value));
+        return;
+    }
+    char *preview = malloc(preview_bytes + SKIP_ONE);
+    if (!preview) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_str(doc, ""));
+        return;
+    }
+    memcpy(preview, value, preview_bytes);
+    preview[preview_bytes] = '\0';
+    mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_strcpy(doc, preview));
+    free(preview);
+}
+
+static void mcp_usage_add_simple_value(yyjson_mut_doc *doc, yyjson_mut_val *obj,
+                                       const char *key, yyjson_val *val,
+                                       size_t preview_bytes) {
+    if (yyjson_is_str(val)) {
+        mcp_usage_add_capped_string(doc, obj, key, yyjson_get_str(val), preview_bytes);
+    } else if (yyjson_is_int(val)) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_int(doc, yyjson_get_int(val)));
+    } else if (yyjson_is_uint(val)) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_int(doc, (int64_t)yyjson_get_uint(val)));
+    } else if (yyjson_is_real(val)) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_real(doc, yyjson_get_real(val)));
+    } else if (yyjson_is_bool(val)) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_bool(doc, yyjson_get_bool(val)));
+    } else if (yyjson_is_null(val)) {
+        mcp_usage_obj_add_keycopy(doc, obj, key, yyjson_mut_null(doc));
+    }
+}
+
+static void mcp_usage_add_request_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                                          const char *args_json, size_t preview_bytes) {
+    yyjson_mut_val *request = yyjson_mut_obj(doc);
+    yyjson_mut_val *safe_args = yyjson_mut_obj(doc);
+    yyjson_mut_val *arg_keys = yyjson_mut_arr(doc);
+    yyjson_mut_val *redactions = yyjson_mut_arr(doc);
+
+    yyjson_doc *args_doc = args_json ? yyjson_read(args_json, strlen(args_json), 0) : NULL;
+    yyjson_val *args_root = args_doc ? yyjson_doc_get_root(args_doc) : NULL;
+    if (args_root && yyjson_is_obj(args_root)) {
+        yyjson_obj_iter iter = yyjson_obj_iter_with(args_root);
+        yyjson_val *key_val = NULL;
+        while ((key_val = yyjson_obj_iter_next(&iter)) != NULL) {
+            const char *key = yyjson_get_str(key_val);
+            yyjson_val *val = yyjson_obj_iter_get_val(key_val);
+            if (!key) {
+                continue;
+            }
+            yyjson_mut_arr_add_strcpy(doc, arg_keys, key);
+            if (mcp_usage_key_is_secret(key)) {
+                yyjson_mut_arr_add_strcpy(doc, redactions, key);
+                continue;
+            }
+            if (strcmp(key, "semantic_query") == 0 && yyjson_is_arr(val)) {
+                yyjson_mut_val *summary = yyjson_mut_obj(doc);
+                yyjson_mut_obj_add_int(doc, summary, "count", (int64_t)yyjson_arr_size(val));
+                mcp_usage_obj_add_keycopy(doc, safe_args, key, summary);
+                continue;
+            }
+            if (mcp_usage_key_is_allowed(key)) {
+                mcp_usage_add_simple_value(doc, safe_args, key, val, preview_bytes);
+                continue;
+            }
+            if (yyjson_is_obj(val)) {
+                yyjson_mut_val *summary = yyjson_mut_obj(doc);
+                yyjson_mut_obj_add_str(doc, summary, "type", "object");
+                yyjson_mut_obj_add_int(doc, summary, "keys", (int64_t)yyjson_obj_size(val));
+                mcp_usage_obj_add_keycopy(doc, safe_args, key, summary);
+            } else if (yyjson_is_arr(val)) {
+                yyjson_mut_val *summary = yyjson_mut_obj(doc);
+                yyjson_mut_obj_add_str(doc, summary, "type", "array");
+                yyjson_mut_obj_add_int(doc, summary, "count", (int64_t)yyjson_arr_size(val));
+                mcp_usage_obj_add_keycopy(doc, safe_args, key, summary);
+            } else if (yyjson_is_str(val)) {
+                yyjson_mut_arr_add_strcpy(doc, redactions, key);
+            } else {
+                mcp_usage_add_simple_value(doc, safe_args, key, val, preview_bytes);
+            }
+        }
+    }
+
+    yyjson_mut_obj_add_val(doc, request, "safe_args", safe_args);
+    yyjson_mut_obj_add_val(doc, request, "arg_keys", arg_keys);
+    yyjson_mut_obj_add_val(doc, request, "redactions", redactions);
+    yyjson_mut_obj_add_val(doc, root, "request", request);
+    if (args_doc) {
+        yyjson_doc_free(args_doc);
+    }
+}
+
+static const char *mcp_usage_expected_from_container(yyjson_val *container) {
+    if (!container || !yyjson_is_obj(container)) {
+        return NULL;
+    }
+    yyjson_val *expected = yyjson_obj_get(container, "expected");
+    return expected && yyjson_is_str(expected) ? yyjson_get_str(expected) : NULL;
+}
+
+static void mcp_usage_add_expected(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                                   const char *params_raw, const char *tool_name) {
+    yyjson_mut_val *expected_obj = yyjson_mut_obj(doc);
+    const char *expected = NULL;
+    const char *source = "none";
+    yyjson_doc *params_doc = params_raw ? yyjson_read(params_raw, strlen(params_raw), 0) : NULL;
+    yyjson_val *params_root = params_doc ? yyjson_doc_get_root(params_doc) : NULL;
+    if (params_root && yyjson_is_obj(params_root)) {
+        yyjson_val *cbm = yyjson_obj_get(params_root, "_cbm");
+        expected = mcp_usage_expected_from_container(cbm);
+        if (expected) {
+            source = "params._cbm.expected";
+        } else {
+            yyjson_val *meta = yyjson_obj_get(params_root, "meta");
+            expected = mcp_usage_expected_from_container(meta);
+            if (expected) {
+                source = "params.meta.expected";
+            }
+        }
+    }
+
+    if (expected) {
+        yyjson_mut_obj_add_strcpy(doc, expected_obj, "client", expected);
+        yyjson_mut_obj_add_str(doc, expected_obj, "source", source);
+    } else {
+        yyjson_mut_obj_add_null(doc, expected_obj, "client");
+        yyjson_mut_obj_add_str(doc, expected_obj, "source", "none");
+        yyjson_mut_val *inferred = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_strcpy(doc, inferred, "operation", tool_name ? tool_name : "unknown");
+        yyjson_mut_obj_add_bool(doc, inferred, "expected_success", true);
+        yyjson_mut_obj_add_str(doc, inferred, "expected_shape", "mcp_text_result");
+        yyjson_mut_obj_add_val(doc, expected_obj, "inferred", inferred);
+    }
+    yyjson_mut_obj_add_val(doc, root, "expected", expected_obj);
+    if (params_doc) {
+        yyjson_doc_free(params_doc);
+    }
+}
+
+static void mcp_usage_add_structured_summary(yyjson_mut_doc *doc, yyjson_mut_val *summary,
+                                             yyjson_val *structured) {
+    if (!structured || !yyjson_is_obj(structured)) {
+        return;
+    }
+    const char *scalar_keys[] = {"status", "total", "count", "has_more", "search_mode",
+                                 "traces_received"};
+    for (size_t i = 0; i < sizeof(scalar_keys) / sizeof(scalar_keys[0]); i++) {
+        yyjson_val *v = yyjson_obj_get(structured, scalar_keys[i]);
+        if (v) {
+            mcp_usage_add_simple_value(doc, summary, scalar_keys[i], v,
+                                       cbm_mcp_usage_log_preview_bytes());
+        }
+    }
+    const char *array_keys[] = {"results", "semantic_results", "nodes", "edges", "rows", "files"};
+    for (size_t i = 0; i < sizeof(array_keys) / sizeof(array_keys[0]); i++) {
+        yyjson_val *v = yyjson_obj_get(structured, array_keys[i]);
+        if (v && yyjson_is_arr(v)) {
+            char count_key[CBM_SZ_64];
+            snprintf(count_key, sizeof(count_key), "%s_count", array_keys[i]);
+            mcp_usage_obj_add_keycopy(doc, summary, count_key,
+                                      yyjson_mut_int(doc, (int64_t)yyjson_arr_size(v)));
+        }
+    }
+}
+
+static void mcp_usage_add_result_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                                         const char *result_json, bool is_err,
+                                         size_t preview_bytes) {
+    yyjson_mut_val *result = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_str(doc, result, "shape", "mcp_text_result");
+    yyjson_mut_obj_add_bool(doc, result, "is_error", is_err);
+
+    yyjson_doc *res_doc = result_json ? yyjson_read(result_json, strlen(result_json), 0) : NULL;
+    yyjson_val *res_root = res_doc ? yyjson_doc_get_root(res_doc) : NULL;
+    if (res_root && yyjson_is_obj(res_root)) {
+        yyjson_val *structured = yyjson_obj_get(res_root, "structuredContent");
+        yyjson_mut_val *structured_keys = yyjson_mut_arr(doc);
+        if (structured && yyjson_is_obj(structured)) {
+            yyjson_obj_iter iter = yyjson_obj_iter_with(structured);
+            yyjson_val *key_val = NULL;
+            while ((key_val = yyjson_obj_iter_next(&iter)) != NULL) {
+                const char *key = yyjson_get_str(key_val);
+                if (key) {
+                    yyjson_mut_arr_add_strcpy(doc, structured_keys, key);
+                }
+            }
+            yyjson_mut_val *summary = yyjson_mut_obj(doc);
+            mcp_usage_add_structured_summary(doc, summary, structured);
+            yyjson_mut_obj_add_val(doc, result, "summary", summary);
+        }
+        yyjson_mut_obj_add_val(doc, result, "structured_keys", structured_keys);
+
+        yyjson_val *content = yyjson_obj_get(res_root, "content");
+        if (content && yyjson_is_arr(content) && yyjson_arr_size(content) > 0) {
+            yyjson_val *item = yyjson_arr_get(content, 0);
+            yyjson_val *text = item && yyjson_is_obj(item) ? yyjson_obj_get(item, "text") : NULL;
+            if (text && yyjson_is_str(text)) {
+                const char *text_s = yyjson_get_str(text);
+                size_t text_len = strlen(text_s);
+                yyjson_mut_obj_add_int(doc, result, "text_bytes", (int64_t)text_len);
+                mcp_usage_add_capped_string(doc, result, "text_preview", text_s, preview_bytes);
+                yyjson_mut_obj_add_bool(doc, result, "text_truncated", text_len > preview_bytes);
+            }
+        }
+    } else if (result_json) {
+        size_t len = strlen(result_json);
+        yyjson_mut_obj_add_int(doc, result, "text_bytes", (int64_t)len);
+        mcp_usage_add_capped_string(doc, result, "text_preview", result_json, preview_bytes);
+        yyjson_mut_obj_add_bool(doc, result, "text_truncated", len > preview_bytes);
+    }
+    yyjson_mut_obj_add_val(doc, root, "result", result);
+    if (res_doc) {
+        yyjson_doc_free(res_doc);
+    }
+}
+
+static void mcp_usage_log_tool_call(const cbm_jsonrpc_request_t *req, const char *tool_name,
+                                    const char *tool_args, const char *result_json,
+                                    bool is_err, long long duration_us) {
+    if (!cbm_mcp_usage_log_enabled()) {
+        return;
+    }
+    size_t preview_bytes = cbm_mcp_usage_log_preview_bytes();
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+    yyjson_mut_obj_add_str(doc, root, "kind", "mcp.usage");
+    yyjson_mut_obj_add_str(doc, root, "mcp", "codebase-memory-mcp");
+    yyjson_mut_obj_add_str(doc, root, "jsonrpc_method", req && req->method ? req->method : "tools/call");
+    if (req && req->id_str) {
+        yyjson_mut_obj_add_strcpy(doc, root, "request_id", req->id_str);
+    } else if (req) {
+        yyjson_mut_obj_add_int(doc, root, "request_id", req->id);
+    } else {
+        yyjson_mut_obj_add_null(doc, root, "request_id");
+    }
+    yyjson_mut_obj_add_strcpy(doc, root, "tool", tool_name ? tool_name : "");
+    yyjson_mut_obj_add_int(doc, root, "duration_us", duration_us);
+    yyjson_mut_obj_add_bool(doc, root, "is_error", is_err);
+    mcp_usage_add_request_summary(doc, root, tool_args, preview_bytes);
+    mcp_usage_add_expected(doc, root, req ? req->params_raw : NULL, tool_name);
+    mcp_usage_add_result_summary(doc, root, result_json, is_err, preview_bytes);
+    char *line = yy_doc_to_str(doc);
+    if (line) {
+        cbm_mcp_usage_log_append(line);
+        free(line);
+    }
+    yyjson_mut_doc_free(doc);
+}
+
+static void mcp_usage_log_error(const char *kind, const cbm_jsonrpc_request_t *req,
+                                const char *raw_line, int error_code,
+                                const char *error_message, long long duration_us) {
+    if (!cbm_mcp_usage_log_enabled()) {
+        return;
+    }
+    size_t preview_bytes = cbm_mcp_usage_log_preview_bytes();
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+    yyjson_mut_obj_add_str(doc, root, "kind", kind);
+    yyjson_mut_obj_add_str(doc, root, "mcp", "codebase-memory-mcp");
+    if (req && req->method) {
+        yyjson_mut_obj_add_str(doc, root, "jsonrpc_method", req->method);
+    } else {
+        yyjson_mut_obj_add_null(doc, root, "jsonrpc_method");
+    }
+    if (req && req->id_str) {
+        yyjson_mut_obj_add_strcpy(doc, root, "request_id", req->id_str);
+    } else if (req && req->has_id) {
+        yyjson_mut_obj_add_int(doc, root, "request_id", req->id);
+    } else {
+        yyjson_mut_obj_add_null(doc, root, "request_id");
+    }
+    yyjson_mut_obj_add_null(doc, root, "tool");
+    yyjson_mut_obj_add_bool(doc, root, "is_error", true);
+    yyjson_mut_obj_add_int(doc, root, "duration_us", duration_us);
+    yyjson_mut_val *request = yyjson_mut_obj(doc);
+    if (raw_line) {
+        mcp_usage_add_capped_string(doc, request, "raw_preview", raw_line, preview_bytes);
+    }
+    yyjson_mut_obj_add_val(doc, root, "request", request);
+    yyjson_mut_val *result = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_int(doc, result, "error_code", error_code);
+    yyjson_mut_obj_add_str(doc, result, "error_message", error_message ? error_message : "error");
+    yyjson_mut_obj_add_val(doc, root, "result", result);
+    char *line = yy_doc_to_str(doc);
+    if (line) {
+        cbm_mcp_usage_log_append(line);
+        free(line);
+    }
+    yyjson_mut_doc_free(doc);
+}
+
 /* ── Server request handler ───────────────────────────────────── */
 
 char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
     cbm_jsonrpc_request_t req = {0};
     if (cbm_jsonrpc_parse(line, &req) < 0) {
+        mcp_usage_log_error("mcp.parse_error", NULL, line, JSONRPC_PARSE_ERROR, "Parse error", 0);
         return cbm_jsonrpc_format_error(0, JSONRPC_PARSE_ERROR, "Parse error");
     }
 
@@ -5901,6 +6239,7 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
         long long request_dur_us = ((long long)(t1.tv_sec - req_t0.tv_sec) * MCP_S_TO_US) +
                                    ((long long)(t1.tv_nsec - req_t0.tv_nsec) / MCP_MS_TO_US);
         cbm_log_mcp_request(req.method, tool_name, is_err, request_dur_us);
+        mcp_usage_log_tool_call(&req, tool_name, tool_args, result_json, is_err, request_dur_us);
         request_logged = true;
 
         result_json = inject_update_notice(srv, result_json);
@@ -5922,6 +6261,8 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
         long long dur_us = ((long long)(t1.tv_sec - req_t0.tv_sec) * MCP_S_TO_US) +
                            ((long long)(t1.tv_nsec - req_t0.tv_nsec) / MCP_MS_TO_US);
         cbm_log_mcp_request(req.method, NULL, true, dur_us);
+        mcp_usage_log_error("mcp.method_error", &req, NULL, JSONRPC_METHOD_NOT_FOUND,
+                            "Method not found", dur_us);
         cbm_jsonrpc_request_free(&req);
         return err;
     }

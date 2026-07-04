@@ -23,7 +23,6 @@
  * test_grammar_labels.c provides the expected histogram per grammar.
  *
  * Known expected-RED cases (document the gap, keep for fix-phase):
- *   - Dart CALLS edge: extract_calls.c has no dart branch (selector call).
  *   - Groovy CALLS edge: function_call callee resolution unhandled.
  *
  * Do NOT register in test_main.c — run via standalone suite.
@@ -1354,13 +1353,11 @@ TEST(probe_dart_class) {
     PASS();
 }
 
-/* Dart CALLS edge — KNOWN EXPECTED RED: extract_calls.c lacks Dart branch.
- * Kept as a reproduction: turns GREEN when the fix is shipped. */
-TEST(probe_dart_calls_edge_known_gap) {
+/* Dart CALLS edge: selector-based top-level invocations resolve to CALLS. */
+TEST(probe_dart_calls_edge) {
     NcpMetrics m = ncp_metrics("chain.dart", "void helper() {\n  print('helper');\n}\n\n"
                                              "void run() {\n  helper();\n}\n");
     ASSERT_TRUE(m.ok);
-    /* This assertion SHOULD fail until the Dart CALLS branch is added. */
     ASSERT_TRUE(m.calls >= 1);
     PASS();
 }
@@ -1752,10 +1749,10 @@ SUITE(node_creation_probe) {
     RUN_TEST(probe_bash_functions_calls);
     RUN_TEST(probe_bash_function_keyword);
 
-    /* Dart (grammar-only; CALLS gap is a known-red reproduction) */
+    /* Dart */
     RUN_TEST(probe_dart_functions);
     RUN_TEST(probe_dart_class);
-    RUN_TEST(probe_dart_calls_edge_known_gap);
+    RUN_TEST(probe_dart_calls_edge);
 
     /* Elixir (grammar-only) */
     RUN_TEST(probe_elixir_module_calls);

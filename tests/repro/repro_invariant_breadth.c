@@ -24,8 +24,8 @@
  *     odin, slang, squirrel, vimscript, cairo  (14 cases)
  *
  *   RED (module-sourced or no CALLS at all -- reproduces the gap):
- *     r, julia, dart, groovy, commonlisp, powershell, ada, clojure,
- *     fsharp, racket, rescript, scheme  (12 cases)
+ *     r, julia, groovy, commonlisp, powershell, ada, clojure,
+ *     fsharp, racket, rescript, scheme  (11 cases)
  *
  * Note: the "suspicious" group (r, julia, ...) from QUALITY_ANALYSIS may be
  * GREEN because the calls-breadth table (test_lang_contract.c) already shows
@@ -365,15 +365,6 @@ static const IBCase IB_CASES[] = {
         1, NULL
     },
 
-    /* ------------------------------------------------------------------ */
-    /* KNOWN-GAP GROUP                                                     */
-    /* These languages fail in the existing calls-breadth contract too     */
-    /* (expect_calls=false in test_lang_contract.c CALL_CASES).            */
-    /* The primary gap is callee extraction; callable-sourcing cannot be   */
-    /* verified until a CALLS edge exists.  Both invariants are asserted:  */
-    /* calls >= 1 AND module_calls == 0.                                   */
-    /* ------------------------------------------------------------------ */
-
     {
         "dart", "a.dart",
         "void helper() {\n"
@@ -383,15 +374,18 @@ static const IBCase IB_CASES[] = {
         "void run() {\n"
         "  helper();\n"
         "}\n",
-        /*
-         * Dart: selector call node carries no callee field and the first child
-         * is not an identifier; no dart branch in extract_calls.c.  No CALLS
-         * edge is produced at all, so callable-sourcing cannot be tested
-         * independently.  Both gaps (no CALLS + callable-sourcing) are RED.
-         */
-        0, "selector call node: no callee field, first child not identifier; "
-           "no dart branch in extract_calls.c"
+        /* Dart selector calls are extracted and should remain callable-sourced. */
+        1, NULL
     },
+
+    /* ------------------------------------------------------------------ */
+    /* KNOWN-GAP GROUP                                                     */
+    /* These languages fail in the existing calls-breadth contract too     */
+    /* (expect_calls=false in test_lang_contract.c CALL_CASES).            */
+    /* The primary gap is callee extraction; callable-sourcing cannot be   */
+    /* verified until a CALLS edge exists.  Both invariants are asserted:  */
+    /* calls >= 1 AND module_calls == 0.                                   */
+    /* ------------------------------------------------------------------ */
 
     {
         "groovy", "a.groovy",

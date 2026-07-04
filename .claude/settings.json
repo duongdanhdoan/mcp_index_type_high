@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__codebase-memory-mcp__list_projects",
+      "mcp__codebase-memory-mcp__search_code",
+      "Bash(chmod +x /Users/doan/Desktop/mcp_index_type_high/scripts/checkpoint.sh)",
+      "Bash(bash -n /Users/doan/Desktop/mcp_index_type_high/scripts/checkpoint.sh)",
+      "Bash(make -f /Users/doan/Desktop/mcp_index_type_high/Makefile.cbm -C /Users/doan/Desktop/mcp_index_type_high -n checkpoint)",
+      "Bash(git -C /Users/doan/Desktop/mcp_index_type_high diff -- Makefile.cbm scripts/checkpoint.sh)",
+      "Bash(bash /Users/doan/Desktop/mcp_index_type_high/scripts/check-no-test-skips.sh)",
+      "Bash(git -C /Users/doan/Desktop/mcp_index_type_high diff --stat)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Bash(python3 -)",
+      "Bash(make -f Makefile.cbm build/c/test-runner)",
+      "Bash(./build/c/test-runner mcp *)",
+      "Bash(bash tests/smoke_guard.sh)",
+      "mcp__codebase-memory-mcp__search_graph",
+      "Bash(make -f Makefile.cbm checkpoint)",
+      "Bash(make -f Makefile.cbm cbm)",
+      "Bash(./build/c/codebase-memory-mcp install *)"
+    ]
+  }
+}

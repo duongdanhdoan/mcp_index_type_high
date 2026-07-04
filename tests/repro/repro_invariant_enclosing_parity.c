@@ -67,7 +67,7 @@
  * SECOND, INDEPENDENT GAP (callee resolution) — IMPORTANT for the fixer:
  *   Some drifted langs ALSO have no callee-resolution branch in extract_calls.c
  *   (test_lang_contract.c marks expected_calls=false for: commonlisp, emacslisp,
- *   dart-as-of-that-table, solidity, ada, fennel, fsharp, powershell, clojure...).
+ *   solidity, ada, fennel, fsharp, powershell, clojure...).
  *   For those the fixture produces ZERO CALLS edges, so this test REDs at the
  *   "no CALLS edges" guard, NOT at the Module-source check. That is STILL the
  *   correct expected-RED state, but fixing gap #3 (the enclosing-func switch)
@@ -297,9 +297,8 @@ static const parity_case_t case_emacslisp = {
 
 /*
  * DART — FULLY DRIFTED (function_signature/method_signature not in generic).
- * The call to helper() is inside run()'s body. Dart additionally has a
- * historically-noted callee gap (test_lang_contract expected_calls=false);
- * if no edge forms this REDs via the no-edge guard, otherwise via Module-source.
+ * The call to helper() is inside run()'s body. Dart selector calls are extracted;
+ * this case now guards callable-sourcing for the produced CALLS edge.
  */
 static const parity_case_t case_dart = {
     CBM_LANG_DART, "Dart", "a.dart",

@@ -76,12 +76,10 @@
  *     Groovy     -- function_call callee not on a function/name field; no groovy
  *                   branch in extract_calls.c -- likely no in-body CALLS edge,
  *                   so dimension 7 cannot reach >=1 callable-sourced (RED).
- *     Dart       -- selector call node carries no callee field; no dart branch
- *                   in extract_calls.c -- likely no in-body CALLS edge (RED).
  *
  * Dimensions 1-6 and 8 are expected GREEN for these idiomatic fixtures across
  * all 12 languages; dimension 7 is the deliverable RED signal for Perl/R/Julia/
- * Groovy/Dart and the GREEN regression guard for Python/JS/TS/TSX/Lua/Ruby/PHP.
+ * Groovy and the GREEN regression guard for Python/JS/TS/TSX/Lua/Ruby/PHP/Dart.
  *
  * Coding rule: inline comments are line comments only (no block comments inside
  * block comments).
@@ -501,10 +499,8 @@ TEST(repro_grammar_scripting_groovy) {
 
 /* ── Dart ─────────────────────────────────────────────────────────────────────
  * Idiomatic: import, a class with two methods, in-body call.
- * Expected: dims 1-5 + 8 GREEN. Dim 6 (calls-extracted) and dim 7 are RED:
- * "selector call node carries no callee field and the first child is not an
- * identifier; no dart branch in extract_calls.c" (breadth file), so no in-body
- * CALLS edge is produced. RED IS the deliverable. Uses CBM_LANG_DART.
+ * Expected GREEN across the battery: Dart selector calls are extracted and
+ * should remain callable-sourced for this fixture. Uses CBM_LANG_DART.
  */
 TEST(repro_grammar_scripting_dart) {
     static const char src[] =

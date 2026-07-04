@@ -6,6 +6,7 @@
 #include "../src/foundation/compat.h"
 #include "../src/foundation/compat_fs.h" /* cbm_unlink / cbm_rmdir */
 #include "../src/foundation/constants.h"
+#include "../src/foundation/diagnostics.h"
 #include "../src/foundation/log.h"
 #include "test_framework.h"
 #include <cli/cli.h>
@@ -32,6 +33,52 @@ static char mcp_log_buf[4096];
 
 static void mcp_capture_log(const char *line) {
     snprintf(mcp_log_buf, sizeof(mcp_log_buf), "%s", line ? line : "");
+}
+
+static bool mcp_file_exists(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return false;
+    }
+    fclose(f);
+    return true;
+}
+
+static char *mcp_read_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long len = ftell(f);
+    if (len < 0) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t n = fread(buf, 1, (size_t)len, f);
+    fclose(f);
+    buf[n] = '\0';
+    return buf;
+}
+
+static void mcp_usage_tmp_path(char *path, size_t path_sz, const char *name) {
+    snprintf(path, path_sz, "%s/%s-%d.jsonl", cbm_tmpdir(), name, (int)getpid());
+}
+
+static void mcp_restore_usage_env(const char *enabled, const char *path, const char *preview) {
+    enabled ? cbm_setenv("CBM_MCP_USAGE_LOG", enabled, 1) : cbm_unsetenv("CBM_MCP_USAGE_LOG");
+    path ? cbm_setenv("CBM_MCP_USAGE_LOG_PATH", path, 1) : cbm_unsetenv("CBM_MCP_USAGE_LOG_PATH");
+    preview ? cbm_setenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES", preview, 1)
+            : cbm_unsetenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES");
 }
 
 static bool response_contains_json_fragment(const char *response, const char *fragment) {
@@ -631,6 +678,126 @@ TEST(server_handle_logs_request_without_params) {
     ASSERT_NOT_NULL(strstr(mcp_log_buf, "status=ok"));
     ASSERT_NULL(strstr(mcp_log_buf, "token"));
     ASSERT_NULL(strstr(mcp_log_buf, "secret"));
+    PASS();
+}
+
+TEST(server_handle_usage_log_disabled_by_default) {
+    char log_path[CBM_PATH_MAX];
+    mcp_usage_tmp_path(log_path, sizeof(log_path), "cbm-mcp-usage-disabled");
+    cbm_unlink(log_path);
+
+    char *saved_enabled = getenv("CBM_MCP_USAGE_LOG") ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG")) : NULL;
+    char *saved_path = getenv("CBM_MCP_USAGE_LOG_PATH") ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG_PATH")) : NULL;
+    char *saved_preview = getenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES")
+                              ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES"))
+                              : NULL;
+    cbm_unsetenv("CBM_MCP_USAGE_LOG");
+    cbm_setenv("CBM_MCP_USAGE_LOG_PATH", log_path, 1);
+    cbm_unsetenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES");
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":220,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"list_projects\",\"arguments\":{}}}");
+    ASSERT_NOT_NULL(resp);
+    free(resp);
+    cbm_mcp_server_free(srv);
+
+    ASSERT_FALSE(cbm_mcp_usage_log_enabled());
+    ASSERT_FALSE(mcp_file_exists(log_path));
+
+    mcp_restore_usage_env(saved_enabled, saved_path, saved_preview);
+    free(saved_enabled);
+    free(saved_path);
+    free(saved_preview);
+    cbm_unlink(log_path);
+    PASS();
+}
+
+TEST(server_handle_usage_log_writes_safe_jsonl) {
+    char log_path[CBM_PATH_MAX];
+    mcp_usage_tmp_path(log_path, sizeof(log_path), "cbm-mcp-usage-enabled");
+    cbm_unlink(log_path);
+
+    char *saved_enabled = getenv("CBM_MCP_USAGE_LOG") ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG")) : NULL;
+    char *saved_path = getenv("CBM_MCP_USAGE_LOG_PATH") ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG_PATH")) : NULL;
+    char *saved_preview = getenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES")
+                              ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES"))
+                              : NULL;
+    cbm_setenv("CBM_MCP_USAGE_LOG", "1", 1);
+    cbm_setenv("CBM_MCP_USAGE_LOG_PATH", log_path, 1);
+    cbm_setenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES", "64", 1);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":221,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_graph\",\"_cbm\":{\"expected\":\"find handler symbols\"},"
+             "\"arguments\":{\"query\":\"HandleRequest\",\"label\":\"Function\",\"limit\":5,"
+             "\"token\":\"secret-token\"}}}");
+    ASSERT_NOT_NULL(resp);
+    free(resp);
+    cbm_mcp_server_free(srv);
+
+    char *log = mcp_read_file(log_path);
+    ASSERT_NOT_NULL(log);
+    ASSERT_NOT_NULL(strstr(log, "\"kind\":\"mcp.usage\""));
+    ASSERT_NOT_NULL(strstr(log, "\"mcp\":\"codebase-memory-mcp\""));
+    ASSERT_NOT_NULL(strstr(log, "\"jsonrpc_method\":\"tools/call\""));
+    ASSERT_NOT_NULL(strstr(log, "\"tool\":\"search_graph\""));
+    ASSERT_NOT_NULL(strstr(log, "\"query\":\"HandleRequest\""));
+    ASSERT_NOT_NULL(strstr(log, "\"label\":\"Function\""));
+    ASSERT_NOT_NULL(strstr(log, "\"limit\":5"));
+    ASSERT_NOT_NULL(strstr(log, "find handler symbols"));
+    ASSERT_NOT_NULL(strstr(log, "params._cbm.expected"));
+    ASSERT_NOT_NULL(strstr(log, "\"result\""));
+    ASSERT_NOT_NULL(strstr(log, "\"text_bytes\""));
+    ASSERT_NOT_NULL(strstr(log, "\"text_truncated\""));
+    ASSERT_NOT_NULL(strstr(log, "\"redactions\":[\"token\"]"));
+    ASSERT_NULL(strstr(log, "secret-token"));
+    free(log);
+
+    mcp_restore_usage_env(saved_enabled, saved_path, saved_preview);
+    free(saved_enabled);
+    free(saved_path);
+    free(saved_preview);
+    cbm_unlink(log_path);
+    PASS();
+}
+
+TEST(server_handle_usage_log_records_parse_error) {
+    char log_path[CBM_PATH_MAX];
+    mcp_usage_tmp_path(log_path, sizeof(log_path), "cbm-mcp-usage-parse");
+    cbm_unlink(log_path);
+
+    char *saved_enabled = getenv("CBM_MCP_USAGE_LOG") ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG")) : NULL;
+    char *saved_path = getenv("CBM_MCP_USAGE_LOG_PATH") ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG_PATH")) : NULL;
+    char *saved_preview = getenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES")
+                              ? cbm_strdup(getenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES"))
+                              : NULL;
+    cbm_setenv("CBM_MCP_USAGE_LOG", "1", 1);
+    cbm_setenv("CBM_MCP_USAGE_LOG_PATH", log_path, 1);
+    cbm_setenv("CBM_MCP_USAGE_LOG_PREVIEW_BYTES", "64", 1);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    char *resp = cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",bad");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "-32700"));
+    free(resp);
+    cbm_mcp_server_free(srv);
+
+    char *log = mcp_read_file(log_path);
+    ASSERT_NOT_NULL(log);
+    ASSERT_NOT_NULL(strstr(log, "\"kind\":\"mcp.parse_error\""));
+    ASSERT_NOT_NULL(strstr(log, "\"error_code\":-32700"));
+    ASSERT_NOT_NULL(strstr(log, "Parse error"));
+    ASSERT_NOT_NULL(strstr(log, "raw_preview"));
+    free(log);
+
+    mcp_restore_usage_env(saved_enabled, saved_path, saved_preview);
+    free(saved_enabled);
+    free(saved_path);
+    free(saved_preview);
+    cbm_unlink(log_path);
     PASS();
 }
 
@@ -4099,6 +4266,9 @@ SUITE(mcp) {
     RUN_TEST(server_handle_tools_list);
     RUN_TEST(server_handle_tools_list_paginates);
     RUN_TEST(server_handle_logs_request_without_params);
+    RUN_TEST(server_handle_usage_log_disabled_by_default);
+    RUN_TEST(server_handle_usage_log_writes_safe_jsonl);
+    RUN_TEST(server_handle_usage_log_records_parse_error);
     RUN_TEST(server_handle_unknown_method);
 
     /* Server handle — edge cases */

@@ -38,7 +38,7 @@ check_handler() {
     local args="$2"
     echo "[smoke_guard] Invoking $handler with project='$FAKE_PROJECT'..."
     local response
-    response="$("$BINARY" cli "$handler" "$args" 2>/dev/null)"
+    response="$("$BINARY" cli "$handler" "$args" 2>&1 || true)"
     echo "[smoke_guard] Response: $response"
 
     # For a missing .db file, cbm_store_open_path_query returns NULL so
@@ -68,7 +68,43 @@ check_handler "get_graph_schema" "{\"project\":\"$FAKE_PROJECT\"}"
 check_handler "trace_call_path" "{\"project\":\"$FAKE_PROJECT\",\"function_name\":\"main\",\"direction\":\"both\",\"depth\":1}"
 check_handler "get_code_snippet" "{\"project\":\"$FAKE_PROJECT\",\"qualified_name\":\"main\"}"
 
-# ── Step 4: Final result ──────────────────────────────────────────
+# ── Step 4: Logging-enabled guard pass ────────────────────────────
+USAGE_LOG="${TMPDIR:-/tmp}/cbm-smoke-mcp-usage-$$.jsonl"
+rm -f "$USAGE_LOG" "$USAGE_LOG.1"
+echo "[smoke_guard] Invoking search_graph with MCP usage logging enabled..."
+LOG_RESPONSE="$(printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"search_graph\",\"arguments\":{\"project\":\"$FAKE_PROJECT\",\"name_pattern\":\".*\"}}}" | \
+    CBM_MCP_USAGE_LOG=1 CBM_MCP_USAGE_LOG_PATH="$USAGE_LOG" "$BINARY" 2>/dev/null || true)"
+echo "[smoke_guard] Logging response: $LOG_RESPONSE"
+
+if ! echo "$LOG_RESPONSE" | grep -qE "no project loaded|not indexed"; then
+    echo "[smoke_guard] FAIL [usage_log]: response does not contain guard error" >&2
+    echo "[smoke_guard] Got: $LOG_RESPONSE" >&2
+    FAILURES=$((FAILURES + 1))
+else
+    echo "[smoke_guard] PASS [usage_log]: guard error present"
+fi
+
+if [ -f "$GHOST_FILE" ]; then
+    echo "[smoke_guard] FAIL [usage_log]: ghost file created at $GHOST_FILE" >&2
+    rm -f "$GHOST_FILE"
+    FAILURES=$((FAILURES + 1))
+else
+    echo "[smoke_guard] PASS [usage_log]: no ghost .db file"
+fi
+
+if [ ! -f "$USAGE_LOG" ]; then
+    echo "[smoke_guard] FAIL [usage_log]: expected usage log at $USAGE_LOG" >&2
+    FAILURES=$((FAILURES + 1))
+elif ! grep -q '"kind":"mcp.usage"' "$USAGE_LOG" || ! grep -q '"tool":"search_graph"' "$USAGE_LOG"; then
+    echo "[smoke_guard] FAIL [usage_log]: usage log missing expected record" >&2
+    echo "[smoke_guard] Log: $(cat "$USAGE_LOG")" >&2
+    FAILURES=$((FAILURES + 1))
+else
+    echo "[smoke_guard] PASS [usage_log]: usage log sidecar written"
+fi
+rm -f "$USAGE_LOG" "$USAGE_LOG.1"
+
+# ── Step 5: Final result ──────────────────────────────────────────
 if [ "$FAILURES" -gt 0 ]; then
     echo "[smoke_guard] FAILED: $FAILURES check(s) failed." >&2
     exit 1
