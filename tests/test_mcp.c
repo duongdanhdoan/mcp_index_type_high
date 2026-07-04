@@ -123,6 +123,16 @@ static void cleanup_project_db(const char *cache, const char *project) {
     cbm_unlink(path);
 }
 
+static bool mcp_write_text_file(const char *path, const char *content) {
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        return false;
+    }
+    bool ok = fputs(content ? content : "", fp) >= 0;
+    fclose(fp);
+    return ok;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  JSON-RPC PARSING
  * ══════════════════════════════════════════════════════════════════ */
@@ -1727,6 +1737,144 @@ TEST(tool_search_code_no_project) {
     PASS();
 }
 
+TEST(tool_index_repository_flutter_project_searches_dart_symbols) {
+    char tmp_dir[256];
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-flutter-mcp-test-XXXXXX");
+    if (!cbm_mkdtemp(tmp_dir)) {
+        PASS();
+    }
+    char cache[256];
+    snprintf(cache, sizeof(cache), "/tmp/cbm-flutter-mcp-cache-XXXXXX");
+    if (!cbm_mkdtemp(cache)) {
+        cbm_rmdir(tmp_dir);
+        PASS();
+    }
+
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    char lib_dir[512];
+    snprintf(lib_dir, sizeof(lib_dir), "%s/lib", tmp_dir);
+    ASSERT_TRUE(cbm_mkdir_p(lib_dir, 0755));
+
+    char pubspec_path[512];
+    snprintf(pubspec_path, sizeof(pubspec_path), "%s/pubspec.yaml", tmp_dir);
+    ASSERT_TRUE(mcp_write_text_file(pubspec_path,
+                                    "name: cbm_flutter_fixture\n"
+                                    "description: MCP Flutter indexing fixture\n"
+                                    "environment:\n"
+                                    "  sdk: '>=3.0.0 <4.0.0'\n"
+                                    "dependencies:\n"
+                                    "  flutter:\n"
+                                    "    sdk: flutter\n"));
+
+    char main_path[512];
+    snprintf(main_path, sizeof(main_path), "%s/lib/main.dart", tmp_dir);
+    ASSERT_TRUE(mcp_write_text_file(main_path,
+                                    "import 'package:flutter/material.dart';\n"
+                                    "import 'src/counter_service.dart';\n\n"
+                                    "void main() {\n"
+                                    "  runApp(const CounterApp());\n"
+                                    "}\n\n"
+                                    "class CounterApp extends StatelessWidget {\n"
+                                    "  const CounterApp({super.key});\n\n"
+                                    "  @override\n"
+                                    "  Widget build(BuildContext context) {\n"
+                                    "    return MaterialApp(home: CounterHome(service: CounterService()));\n"
+                                    "  }\n"
+                                    "}\n\n"
+                                    "class CounterHome extends StatelessWidget {\n"
+                                    "  final CounterService service;\n"
+                                    "  const CounterHome({super.key, required this.service});\n\n"
+                                    "  @override\n"
+                                    "  Widget build(BuildContext context) {\n"
+                                    "    final value = service.increment(1);\n"
+                                    "    return Text('count: $value');\n"
+                                    "  }\n"
+                                    "}\n"));
+
+    char src_dir[512];
+    snprintf(src_dir, sizeof(src_dir), "%s/lib/src", tmp_dir);
+    ASSERT_TRUE(cbm_mkdir_p(src_dir, 0755));
+    char service_path[512];
+    snprintf(service_path, sizeof(service_path), "%s/counter_service.dart", src_dir);
+    ASSERT_TRUE(mcp_write_text_file(service_path,
+                                    "class CounterService {\n"
+                                    "  int increment(int value) {\n"
+                                    "    return _normalize(value) + 1;\n"
+                                    "  }\n\n"
+                                    "  int _normalize(int value) {\n"
+                                    "    return value < 0 ? 0 : value;\n"
+                                    "  }\n"
+                                    "}\n"));
+
+    char *project = cbm_project_name_from_path(tmp_dir);
+    ASSERT_NOT_NULL(project);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+
+    char args[1024];
+    snprintf(args, sizeof(args), "{\"repo_path\":\"%s\",\"mode\":\"fast\"}", tmp_dir);
+    char *resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT(response_contains_json_fragment(resp, "\"status\":\"indexed\""));
+    free(resp);
+
+    char search_args[1024];
+    snprintf(search_args, sizeof(search_args),
+             "{\"project\":\"%s\",\"name_pattern\":\"Counter.*\",\"limit\":20}", project);
+    resp = cbm_mcp_handle_tool(srv, "search_graph", search_args);
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "CounterApp"));
+    ASSERT_NOT_NULL(strstr(inner, "CounterService"));
+    ASSERT_NOT_NULL(strstr(inner, "lib/main.dart"));
+    ASSERT_NOT_NULL(strstr(inner, "lib/src/counter_service.dart"));
+    free(inner);
+    free(resp);
+
+    snprintf(search_args, sizeof(search_args),
+             "{\"project\":\"%s\",\"pattern\":\"CounterService\",\"file_pattern\":\"*.dart\"}",
+             project);
+    resp = cbm_mcp_handle_tool(srv, "search_code", search_args);
+    ASSERT_NOT_NULL(resp);
+    inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "CounterService"));
+    ASSERT_NOT_NULL(strstr(inner, "lib/src/counter_service.dart"));
+    free(inner);
+    free(resp);
+
+    snprintf(search_args, sizeof(search_args),
+             "{\"project\":\"%s\",\"function_name\":\"increment\",\"direction\":\"outbound\","
+             "\"depth\":2}",
+             project);
+    resp = cbm_mcp_handle_tool(srv, "trace_path", search_args);
+    ASSERT_NOT_NULL(resp);
+    inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "_normalize"));
+    free(inner);
+    free(resp);
+
+    cbm_mcp_server_free(srv);
+    cleanup_project_db(cache, project);
+    restore_cache_dir(saved_copy);
+    free(saved_copy);
+    free(project);
+    cbm_unlink(service_path);
+    cbm_rmdir(src_dir);
+    cbm_unlink(main_path);
+    cbm_unlink(pubspec_path);
+    cbm_rmdir(lib_dir);
+    cbm_rmdir(cache);
+    cbm_rmdir(tmp_dir);
+    PASS();
+}
+
 TEST(search_code_multi_word) {
     char tmp[512];
     cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
@@ -1751,6 +1899,84 @@ TEST(search_code_multi_word) {
 
     cleanup_snippet_dir(tmp);
     cbm_mcp_server_free(srv);
+    PASS();
+}
+
+TEST(search_code_compact_context_uses_bounded_match_windows) {
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_srch_ctx_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("cbm_mkdtemp failed");
+    }
+
+    char src_path[768];
+    snprintf(src_path, sizeof(src_path), "%s/navigation.dart", tmp);
+    FILE *fp = fopen(src_path, "w");
+    if (!fp) {
+        rmdir(tmp);
+        FAIL("cannot write search context fixture");
+    }
+    fprintf(fp, "class BigController {\n");
+    fprintf(fp, "  void first() {\n");
+    fprintf(fp, "    final topMarker = 'TOP_NAV_CONTEXT';\n");
+    fprintf(fp, "    Navigator.of(context).pop();\n");
+    fprintf(fp, "  }\n");
+    for (int i = 0; i < 80; i++) {
+        if (i == 40) {
+            fprintf(fp, "  final sentinel = 'SHOULD_NOT_APPEAR_IN_COMPACT_CONTEXT';\n");
+        } else {
+            fprintf(fp, "  final filler%d = %d;\n", i, i);
+        }
+    }
+    fprintf(fp, "  void second() {\n");
+    fprintf(fp, "    final bottomMarker = 'BOTTOM_NAV_CONTEXT';\n");
+    fprintf(fp, "    Navigator.of(context).pushNamed('/done');\n");
+    fprintf(fp, "  }\n");
+    fprintf(fp, "}\n");
+    fclose(fp);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+    const char *proj = "compact-context";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, tmp);
+
+    cbm_node_t n = {.project = proj,
+                    .label = "Class",
+                    .name = "BigController",
+                    .qualified_name = "compact-context.BigController",
+                    .file_path = "navigation.dart",
+                    .start_line = 1,
+                    .end_line = 90};
+    ASSERT_GT(cbm_store_upsert_node(st, &n), 0);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":97,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_code\","
+             "\"arguments\":{\"pattern\":\"Navigator\",\"project\":\"compact-context\","
+             "\"file_pattern\":\"*.dart\",\"context\":1,\"limit\":10}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_TRUE(strstr(resp, "\"isError\":true") == NULL);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+
+    ASSERT_NOT_NULL(strstr(inner, "BigController"));
+    ASSERT_NOT_NULL(strstr(inner, "navigation.dart"));
+    ASSERT_NOT_NULL(strstr(inner, "TOP_NAV_CONTEXT"));
+    ASSERT_NOT_NULL(strstr(inner, "BOTTOM_NAV_CONTEXT"));
+    ASSERT_NOT_NULL(strstr(inner, "context_windows"));
+    ASSERT_NOT_NULL(strstr(inner, "context_truncated"));
+    ASSERT_NOT_NULL(strstr(inner, "context gap omitted"));
+    ASSERT_NULL(strstr(inner, "SHOULD_NOT_APPEAR_IN_COMPACT_CONTEXT"));
+    ASSERT_TRUE(strlen(inner) < 6000);
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    unlink(src_path);
+    rmdir(tmp);
     PASS();
 }
 
@@ -4306,11 +4532,13 @@ SUITE(mcp) {
 
     /* Pipeline-dependent tool handlers */
     RUN_TEST(tool_index_repository_missing_path);
+    RUN_TEST(tool_index_repository_flutter_project_searches_dart_symbols);
     RUN_TEST(tool_get_code_snippet_missing_qn);
     RUN_TEST(tool_get_code_snippet_not_found);
     RUN_TEST(tool_search_code_missing_pattern);
     RUN_TEST(tool_search_code_no_project);
     RUN_TEST(search_code_multi_word);
+    RUN_TEST(search_code_compact_context_uses_bounded_match_windows);
     RUN_TEST(search_code_scoped_path_with_spaces_issue687);
     RUN_TEST(search_code_path_filter_prefilter_keeps_matches);
     RUN_TEST(search_code_path_filter_matches_nothing);

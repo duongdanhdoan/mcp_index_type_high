@@ -4396,10 +4396,50 @@ static yyjson_mut_val *build_dedup_files_array(yyjson_mut_doc *doc, search_resul
     return files_arr;
 }
 
+typedef struct {
+    int start;
+    int end;
+} search_context_window_t;
+
+static bool append_compact_context(char **buf, size_t *len, size_t *cap, const char *text,
+                                   size_t max_bytes) {
+    if (!text || text[0] == '\0' || *len >= max_bytes) {
+        return false;
+    }
+    size_t text_len = strlen(text);
+    size_t remaining = max_bytes - *len;
+    size_t copy_len = text_len < remaining ? text_len : remaining;
+    while (*len + copy_len + SKIP_ONE > *cap) {
+        *cap *= PAIR_LEN;
+        if (*cap > max_bytes + SKIP_ONE) {
+            *cap = max_bytes + SKIP_ONE;
+            break;
+        }
+        *buf = safe_realloc(*buf, *cap);
+    }
+    if (*len + copy_len + SKIP_ONE > *cap) {
+        copy_len = *cap - *len - SKIP_ONE;
+    }
+    memcpy(*buf + *len, text, copy_len);
+    *len += copy_len;
+    (*buf)[*len] = '\0';
+    return copy_len == text_len;
+}
+
+static int compact_context_int_cmp(const void *a, const void *b) {
+    int ia = *(const int *)a;
+    int ib = *(const int *)b;
+    return (ia > ib) - (ia < ib);
+}
+
 /* Attach source or context lines to a search result JSON item. */
 static void attach_result_source(yyjson_mut_doc *doc, yyjson_mut_val *item, search_result_t *r,
                                  int mode, int context_lines, const char *root_path) {
-    enum { MODE_FULL = 1 };
+    enum {
+        MODE_FULL = 1,
+        MAX_CONTEXT_WINDOWS = 8,
+        MAX_CONTEXT_BYTES = 12000,
+    };
     if (r->start_line <= 0 || r->end_line <= 0) {
         return;
     }
@@ -4414,18 +4454,89 @@ static void attach_result_source(yyjson_mut_doc *doc, yyjson_mut_val *item, sear
             free(source);
         }
     } else if (context_lines > 0 && r->match_count > 0) {
-        int ctx_start = r->match_lines[0] - context_lines;
-        int ctx_end = r->match_lines[r->match_count - SKIP_ONE] + context_lines;
-        if (ctx_start < SKIP_ONE) {
-            ctx_start = SKIP_ONE;
+        int lines[CBM_SZ_64];
+        int line_count = r->match_count < CBM_SZ_64 ? r->match_count : CBM_SZ_64;
+        for (int i = 0; i < line_count; i++) {
+            lines[i] = r->match_lines[i];
         }
-        char *ctx = read_file_lines(abs_path, ctx_start, ctx_end);
-        if (ctx) {
-            sanitize_ascii(ctx);
+        qsort(lines, (size_t)line_count, sizeof(lines[0]), compact_context_int_cmp);
+
+        search_context_window_t windows[MAX_CONTEXT_WINDOWS];
+        int window_count = 0;
+        int omitted_match_count = 0;
+        bool context_truncated = false;
+        for (int i = 0; i < line_count; i++) {
+            if (lines[i] <= 0 || (i > 0 && lines[i] == lines[i - SKIP_ONE])) {
+                continue;
+            }
+            int start = lines[i] - context_lines;
+            int end = lines[i] + context_lines;
+            if (start < SKIP_ONE) {
+                start = SKIP_ONE;
+            }
+            if (window_count > 0 && start <= windows[window_count - SKIP_ONE].end + SKIP_ONE) {
+                if (end > windows[window_count - SKIP_ONE].end) {
+                    windows[window_count - SKIP_ONE].end = end;
+                }
+            } else if (window_count < MAX_CONTEXT_WINDOWS) {
+                windows[window_count].start = start;
+                windows[window_count].end = end;
+                window_count++;
+            } else {
+                context_truncated = true;
+                omitted_match_count++;
+            }
+        }
+        if (window_count == 0) {
+            return;
+        }
+        if (window_count > SKIP_ONE) {
+            context_truncated = true;
+        }
+
+        size_t cap = CBM_SZ_4K;
+        size_t len = 0;
+        char *ctx = malloc(cap);
+        ctx[0] = '\0';
+        bool byte_capped = false;
+        const char *gap_marker = "\n... context gap omitted ...\n";
+        yyjson_mut_val *windows_arr = yyjson_mut_arr(doc);
+        for (int wi = 0; wi < window_count; wi++) {
+            if (wi > 0 && !append_compact_context(&ctx, &len, &cap, gap_marker, MAX_CONTEXT_BYTES)) {
+                byte_capped = true;
+                break;
+            }
+            char *chunk = read_file_lines(abs_path, windows[wi].start, windows[wi].end);
+            if (!chunk) {
+                continue;
+            }
+            sanitize_ascii(chunk);
+            if (!append_compact_context(&ctx, &len, &cap, chunk, MAX_CONTEXT_BYTES)) {
+                byte_capped = true;
+            }
+            free(chunk);
+
+            yyjson_mut_val *w = yyjson_mut_obj(doc);
+            yyjson_mut_obj_add_int(doc, w, "start_line", windows[wi].start);
+            yyjson_mut_obj_add_int(doc, w, "end_line", windows[wi].end);
+            yyjson_mut_arr_add_val(windows_arr, w);
+            if (byte_capped) {
+                context_truncated = true;
+                break;
+            }
+        }
+        if (len > 0) {
             yyjson_mut_obj_add_strcpy(doc, item, "context", ctx);
-            yyjson_mut_obj_add_int(doc, item, "context_start", ctx_start);
-            free(ctx);
+            yyjson_mut_obj_add_int(doc, item, "context_start", windows[0].start);
+            yyjson_mut_obj_add_val(doc, item, "context_windows", windows_arr);
+            if (context_truncated || byte_capped) {
+                yyjson_mut_obj_add_bool(doc, item, "context_truncated", true);
+            }
+            if (omitted_match_count > 0) {
+                yyjson_mut_obj_add_int(doc, item, "omitted_match_count", omitted_match_count);
+            }
         }
+        free(ctx);
     }
 }
 

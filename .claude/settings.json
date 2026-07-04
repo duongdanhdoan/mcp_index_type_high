@@ -21,7 +21,18 @@
       "Bash(./build/c/codebase-memory-mcp install *)",
       "Bash(gh repo *)",
       "Bash(codebase-memory-mcp --version)",
-      "Read(//Users/doan/.claude/**)"
+      "Read(//Users/doan/.claude/**)",
+      "Bash(git -C /Users/doan/Desktop/mcp_index_type_high status --short)",
+      "Bash(git -C /Users/doan/Desktop/mcp_index_type_high diff -- tests/test_mcp.c)",
+      "Read(//Users/doan/**)",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(python3 -m json.tool /Users/doan/.claude/.mcp.json)",
+      "Bash(python3 -m json.tool /Users/doan/.claude.json)"
+    ],
+    "additionalDirectories": [
+      "/Users/doan/.claude",
+      "/Users/doan"
     ]
   }
 }

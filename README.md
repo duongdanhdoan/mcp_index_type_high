@@ -413,6 +413,39 @@ Then rerun:
 codebase-memory-mcp install -y
 ```
 
+### Enable MCP usage logs for debugging
+
+MCP usage logging is opt-in. Enable it when you want a local debugging trail of what an agent sent to `codebase-memory-mcp`, what the server returned, and what expectation metadata the agent provided.
+
+For Claude Code, add an `env` block to the `codebase-memory-mcp` server entry in `~/.claude/.mcp.json` (and any other Claude config that defines the same server):
+
+```json
+{
+  "mcpServers": {
+    "codebase-memory-mcp": {
+      "command": "/Users/you/.local/bin/codebase-memory-mcp",
+      "env": {
+        "CBM_MCP_USAGE_LOG": "1",
+        "CBM_MCP_USAGE_LOG_PATH": "/Users/you/Desktop/log/codebase-memory-mcp/mcp-usage.jsonl"
+      }
+    }
+  }
+}
+```
+
+- `CBM_MCP_USAGE_LOG=1` turns the sidecar usage logger on.
+- `CBM_MCP_USAGE_LOG_PATH` controls the JSONL file location. If omitted, the default is `~/Desktop/log/codebase-memory-mcp/mcp-usage.jsonl`.
+- Logs are written to a file only; MCP stdout remains reserved for JSON-RPC protocol responses.
+- The logger is fail-open and redacts or summarizes sensitive/large fields such as tokens, passwords, secrets, authorization headers, source-heavy results, and large payloads.
+
+After changing the config, restart Claude Code so the MCP server starts with the new environment variables. Verify with `/mcp`, run a small query such as `list_projects`, then inspect:
+
+```bash
+tail -n 5 ~/Desktop/log/codebase-memory-mcp/mcp-usage.jsonl
+```
+
+Each line is one JSON record containing the tool name, safe request arguments, result summary, duration, error flag, and any expectation metadata supplied through `params._cbm.expected` or `params.meta.expected`.
+
 ### Build from Source
 
 <details>
