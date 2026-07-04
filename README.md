@@ -1,17 +1,17 @@
 # codebase-memory-mcp
 
-[![GitHub Release](https://img.shields.io/github/v/release/DeusData/codebase-memory-mcp?style=flat&color=blue)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/duongdanhdoan/mcp_index_type_high?style=flat&color=blue)](https://github.com/duongdanhdoan/mcp_index_type_high/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/DeusData/codebase-memory-mcp/dry-run.yml?label=CI)](https://github.com/DeusData/codebase-memory-mcp/actions/workflows/dry-run.yml)
-[![Tests](https://img.shields.io/badge/tests-5604_passing-brightgreen)](https://github.com/DeusData/codebase-memory-mcp)
-[![Languages](https://img.shields.io/badge/languages-158-orange)](https://github.com/DeusData/codebase-memory-mcp)
+[![CI](https://img.shields.io/github/actions/workflow/status/duongdanhdoan/mcp_index_type_high/dry-run.yml?label=CI)](https://github.com/duongdanhdoan/mcp_index_type_high/actions/workflows/dry-run.yml)
+[![Tests](https://img.shields.io/badge/tests-5604_passing-brightgreen)](https://github.com/duongdanhdoan/mcp_index_type_high)
+[![Languages](https://img.shields.io/badge/languages-158-orange)](https://github.com/duongdanhdoan/mcp_index_type_high)
 [![Hybrid LSP](https://img.shields.io/badge/Hybrid_LSP-9_languages-blue)](#hybrid-lsp)
-[![Agents](https://img.shields.io/badge/agents-11-purple)](https://github.com/DeusData/codebase-memory-mcp)
-[![Pure C](https://img.shields.io/badge/pure_C-zero_dependencies-blue)](https://github.com/DeusData/codebase-memory-mcp)
-[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/DeusData/codebase-memory-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp)
+[![Agents](https://img.shields.io/badge/agents-11-purple)](https://github.com/duongdanhdoan/mcp_index_type_high)
+[![Pure C](https://img.shields.io/badge/pure_C-zero_dependencies-blue)](https://github.com/duongdanhdoan/mcp_index_type_high)
+[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/duongdanhdoan/mcp_index_type_high/releases/latest)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/duongdanhdoan/mcp_index_type_high/badge)](https://scorecard.dev/viewer/?uri=github.com/duongdanhdoan/mcp_index_type_high)
 [![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-scanned_every_release-brightgreen?logo=virustotal)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-scanned_every_release-brightgreen?logo=virustotal)](https://github.com/duongdanhdoan/mcp_index_type_high/releases/latest)
 [![arXiv](https://img.shields.io/badge/arXiv-2603.27277-b31b1b?logo=arxiv)](https://arxiv.org/abs/2603.27277)
 
 **The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary for macOS, Linux, and Windows — download, run `install`, done.
@@ -20,7 +20,63 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 
 > **Research** — The design and benchmarks behind this project are described in the preprint [*Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP*](https://arxiv.org/abs/2603.27277) (arXiv:2603.27277). Evaluated across 31 real-world repositories: 83% answer quality, 10× fewer tokens, 2.1× fewer tool calls vs. file-by-file exploration.
 
-> **Security & Trust** — This tool reads your codebase and writes to your agent configuration files. That is what it is designed to do. If you prefer to audit before running, the [full source is here](https://github.com/DeusData/codebase-memory-mcp) — every release binary is signed, checksummed, and scanned by 70+ antivirus engines. All processing happens 100% locally; your code never leaves your machine. Found a security issue? We want to know — see [SECURITY.md](SECURITY.md). Security is Priority #1 for us.
+> **Security & Trust** — This tool reads your codebase and writes to your agent configuration files. That is what it is designed to do. If you prefer to audit before running, the [full source is here](https://github.com/duongdanhdoan/mcp_index_type_high) — every release binary is signed, checksummed, and scanned by 70+ antivirus engines. All processing happens 100% locally; your code never leaves your machine. Found a security issue? We want to know — see [SECURITY.md](SECURITY.md). Security is Priority #1 for us.
+
+## What this app is for
+
+codebase-memory-mcp turns a source repository into a **local, queryable knowledge graph** for AI coding agents and developers. Instead of forcing an agent to repeatedly grep, glob, and read files one by one, it indexes the project once and exposes structured answers through MCP tools.
+
+Use it when you need to:
+
+- **Understand an unfamiliar codebase quickly** — ask for architecture, packages, entry points, routes, hotspots, layers, and clusters.
+- **Find the right file or symbol faster** — search by function/class name, qualified name, file pattern, graph degree, or semantic meaning.
+- **Trace impact before editing** — see who calls a function, what it calls, which routes or channels connect services, and what a git diff may affect.
+- **Give coding agents better context** — Claude Code, Codex, Gemini CLI, Cursor, Zed, and other MCP-aware tools can query the graph instead of burning tokens on broad file scans.
+- **Work locally and privately** — indexes live on your machine in SQLite; no code or query data is sent to a hosted service.
+
+## How to use it effectively
+
+1. **Install and connect it to your agent** using the quick-start installer or a release binary.
+2. **Index your repository** once with `index_repository` or by telling your agent: “Index this project.”
+3. **Ask structural questions first** before opening files:
+   - “What is the architecture of this repo?” → `get_architecture`
+   - “Find payment/order handlers.” → `search_graph`
+   - “Who calls `ProcessOrder`?” → `trace_path`
+   - “What changed and what is risky?” → `detect_changes`
+   - “Show the exact implementation of this symbol.” → `get_code_snippet`
+4. **Let the agent use the graph as a map**, then read only the small set of files that matter. This is where the token and speed savings come from.
+5. **Keep the graph fresh** with auto-index or the background watcher so later sessions start with current project knowledge.
+
+## Install and start in 60 seconds
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/install.ps1 -OutFile install.ps1
+Unblock-File .\install.ps1
+.\install.ps1
+```
+
+Then restart your coding agent and ask:
+
+```text
+Index this project
+```
+
+For a local source build:
+
+```bash
+git clone https://github.com/duongdanhdoan/mcp_index_type_high.git
+cd mcp_index_type_high
+scripts/build.sh
+./build/c/codebase-memory-mcp install
+```
 
 <p align="center">
   <img src="docs/graph-ui-screenshot.png" alt="Graph visualization UI showing the codebase-memory-mcp knowledge graph" width="800">
@@ -43,18 +99,18 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 
 **One-line install** (macOS / Linux):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/install.sh | bash
 ```
 
 With graph visualization UI:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui
+curl -fsSL https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/install.sh | bash -s -- --ui
 ```
 
 **Windows** (PowerShell):
 ```powershell
 # 1. Download the installer
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/install.ps1 -OutFile install.ps1
 
 # 2. (Optional but recommended) Inspect the script
 notepad install.ps1
@@ -76,7 +132,7 @@ Restart your coding agent. Say **"Index this project"** — done.
 <details>
 <summary>Manual install</summary>
 
-1. **Download** the archive for your platform from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest):
+1. **Download** the archive for your platform from the [latest release](https://github.com/duongdanhdoan/mcp_index_type_high/releases/latest):
    - `codebase-memory-mcp-<os>-<arch>.tar.gz` (macOS/Linux) or `.zip` (Windows) — standard
    - `codebase-memory-mcp-ui-<os>-<arch>.tar.gz` / `.zip` — with graph visualization
 
@@ -286,13 +342,13 @@ Every release includes `checksums.txt` with SHA-256 hashes. All binaries are sta
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/scripts/setup.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/setup-windows.ps1 | iex
+irm https://raw.githubusercontent.com/duongdanhdoan/mcp_index_type_high/main/scripts/setup-windows.ps1 | iex
 ```
 
 </details>
@@ -312,7 +368,7 @@ The `codebase-memory-mcp-bin` package is available at: https://aur.archlinux.org
 ### Install via Claude Code
 
 ```
-You: "Install this MCP server: https://github.com/DeusData/codebase-memory-mcp"
+You: "Install this MCP server: https://github.com/duongdanhdoan/mcp_index_type_high"
 ```
 
 ### Build from Source
@@ -330,8 +386,8 @@ You: "Install this MCP server: https://github.com/DeusData/codebase-memory-mcp"
 </details>
 
 ```bash
-git clone https://github.com/DeusData/codebase-memory-mcp.git
-cd codebase-memory-mcp
+git clone https://github.com/duongdanhdoan/mcp_index_type_high.git
+cd mcp_index_type_high
 scripts/build.sh                    # standard binary
 scripts/build.sh --with-ui          # with graph visualization
 # Binary at: build/c/codebase-memory-mcp
@@ -582,7 +638,7 @@ internal/cbm/         Vendored tree-sitter grammars (158 languages) + AST extrac
 Every release binary is verified through a multi-layer pipeline before publication:
 
 - **VirusTotal** — all binaries scanned by 70+ antivirus engines (zero detections required to publish)
-- **SLSA Level 3** — cryptographic build provenance generated by GitHub Actions; verify with `gh attestation verify <file> --repo DeusData/codebase-memory-mcp`
+- **SLSA Level 3** — cryptographic build provenance generated by GitHub Actions; verify with `gh attestation verify <file> --repo duongdanhdoan/mcp_index_type_high`
 - **Sigstore cosign** — keyless signatures on all artifacts; bundles included in every release
 - **SHA-256 checksums** — `checksums.txt` published with every release; verified by both install scripts before extraction
 - **CodeQL SAST** — blocks release pipeline if any open alerts remain

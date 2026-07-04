@@ -18,7 +18,8 @@
       "mcp__codebase-memory-mcp__search_graph",
       "Bash(make -f Makefile.cbm checkpoint)",
       "Bash(make -f Makefile.cbm cbm)",
-      "Bash(./build/c/codebase-memory-mcp install *)"
+      "Bash(./build/c/codebase-memory-mcp install *)",
+      "Bash(gh repo *)"
     ]
   }
 }
