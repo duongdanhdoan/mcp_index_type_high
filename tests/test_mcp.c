@@ -746,6 +746,13 @@ TEST(server_handle_usage_log_writes_safe_jsonl) {
              "\"token\":\"secret-token\"}}}");
     ASSERT_NOT_NULL(resp);
     free(resp);
+
+    resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":222,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_code\",\"arguments\":{\"project\":\"demo\","
+             "\"pattern\":\"HandleRequest\",\"token\":\"secret-token\"}}}");
+    ASSERT_NOT_NULL(resp);
+    free(resp);
     cbm_mcp_server_free(srv);
 
     char *log = mcp_read_file(log_path);
@@ -762,6 +769,8 @@ TEST(server_handle_usage_log_writes_safe_jsonl) {
     ASSERT_NOT_NULL(strstr(log, "\"result\""));
     ASSERT_NOT_NULL(strstr(log, "\"text_bytes\""));
     ASSERT_NOT_NULL(strstr(log, "\"text_truncated\""));
+    ASSERT_NOT_NULL(strstr(log, "\"tool\":\"search_code\""));
+    ASSERT_NOT_NULL(strstr(log, "\"pattern\":\"HandleRequest\""));
     ASSERT_NOT_NULL(strstr(log, "\"redactions\":[\"token\"]"));
     ASSERT_NULL(strstr(log, "secret-token"));
     free(log);
@@ -4030,14 +4039,14 @@ TEST(tool_bad_project_error_valid_json_issue235) {
  * name is `internal` (which may differ from the filename), holding one
  * Function node named `fn`. Returns true on success. */
 static bool issue704_make_db(const char *dir, const char *filename, const char *internal,
-                             const char *fn) {
+                             const char *root_path, const char *fn) {
     char path[700];
     snprintf(path, sizeof(path), "%s/%s", dir, filename);
     cbm_store_t *st = cbm_store_open_path(path);
     if (!st) {
         return false;
     }
-    bool ok = (cbm_store_upsert_project(st, internal, dir) == CBM_STORE_OK);
+    bool ok = (cbm_store_upsert_project(st, internal, root_path ? root_path : dir) == CBM_STORE_OK);
     if (ok) {
         char qn[256];
         snprintf(qn, sizeof(qn), "%s.%s", internal, fn);
@@ -4066,19 +4075,37 @@ TEST(tool_resolve_store_by_internal_name_issue704) {
     char *saved_copy = saved ? strdup(saved) : NULL;
     cbm_setenv("CBM_CACHE_DIR", cache, 1);
 
+    char root_alpha[700];
+    char root_beta[700];
+    char root_beta2[700];
+    char root_stale[700];
+    snprintf(root_alpha, sizeof(root_alpha), "%s/root-alpha704", cache);
+    snprintf(root_beta, sizeof(root_beta), "%s/mcp_index_type_high", cache);
+    snprintf(root_beta2, sizeof(root_beta2), "%s/other/mcp_index_type_high", cache);
+    snprintf(root_stale, sizeof(root_stale), "%s/missing-root", cache);
+    ASSERT_EQ(cbm_mkdir(root_alpha), 0);
+    ASSERT_EQ(cbm_mkdir(root_beta), 0);
+    ASSERT_TRUE(cbm_mkdir_p(root_beta2, 0755));
+
     /* (1) control: filename == internal name */
-    ASSERT_TRUE(issue704_make_db(cache, "alpha704.db", "alpha704", "alphaFunc704"));
+    ASSERT_TRUE(issue704_make_db(cache, "alpha704.db", "alpha704", root_alpha, "alphaFunc704"));
 
     /* (2) DRIFT: build beta704.db (internal "beta704") then rename the file to
      *     gamma704.db, so filename "gamma704" != internal "beta704". */
-    ASSERT_TRUE(issue704_make_db(cache, "beta704.db", "beta704", "betaFunc704"));
+    ASSERT_TRUE(issue704_make_db(cache, "beta704.db", "beta704", root_beta, "betaFunc704"));
     char beta_path[700];
     char gamma_path[700];
     snprintf(beta_path, sizeof(beta_path), "%s/beta704.db", cache);
     snprintf(gamma_path, sizeof(gamma_path), "%s/gamma704.db", cache);
     ASSERT_EQ(rename(beta_path, gamma_path), 0);
 
-    /* (3) ghost: 0-byte db file */
+    /* (3) ambiguous basename alias: same root basename maps to another project. */
+    ASSERT_TRUE(issue704_make_db(cache, "beta704b.db", "beta704b", root_beta2, "betaFunc704b"));
+
+    /* (4) stale project root should be filtered from list_projects. */
+    ASSERT_TRUE(issue704_make_db(cache, "stale704.db", "stale704", root_stale, "staleFunc704"));
+
+    /* (5) ghost: 0-byte db file */
     char ghost_path[700];
     snprintf(ghost_path, sizeof(ghost_path), "%s/ghost704.db", cache);
     FILE *gp = fopen(ghost_path, "w");
@@ -4088,15 +4115,17 @@ TEST(tool_resolve_store_by_internal_name_issue704) {
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
     ASSERT_NOT_NULL(srv);
 
-    /* ── A: list_projects reports INTERNAL names; filters the ghost ── */
+    /* ── A: list_projects reports INTERNAL names; filters ghost + stale ── */
     char *list =
         cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
                                    "\"params\":{\"name\":\"list_projects\",\"arguments\":{}}}");
     ASSERT_NOT_NULL(list);
     ASSERT_NOT_NULL(strstr(list, "alpha704")); /* control */
     ASSERT_NOT_NULL(strstr(list, "beta704"));  /* internal name of drifted db (RED before) */
+    ASSERT_NOT_NULL(strstr(list, "beta704b"));
     ASSERT_NULL(strstr(list, "gamma704"));     /* filename must NOT be advertised (RED before) */
     ASSERT_NULL(strstr(list, "ghost704"));     /* 0-byte ghost filtered (RED before) */
+    ASSERT_NULL(strstr(list, "stale704"));     /* missing root filtered */
     free(list);
 
     /* ── B: the drifted project resolves by its INTERNAL name ──────── */
@@ -4136,6 +4165,25 @@ TEST(tool_resolve_store_by_internal_name_issue704) {
     ASSERT_NOT_NULL(strstr(q_gamma, "not found"));
     free(q_gamma);
 
+    /* ── F: unique basename alias resolves when only one project matches ── */
+    char *q_alpha_alias = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_graph\",\"arguments\":{"
+             "\"project\":\"root-alpha704\",\"name_pattern\":\"alphaFunc704\",\"limit\":5}}}");
+    ASSERT_NOT_NULL(q_alpha_alias);
+    ASSERT_NOT_NULL(strstr(q_alpha_alias, "alphaFunc704"));
+    ASSERT_NULL(strstr(q_alpha_alias, "not found"));
+    free(q_alpha_alias);
+
+    /* ── G: ambiguous basename alias must stay unresolved ───────────── */
+    char *q_alias_amb = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_graph\",\"arguments\":{"
+             "\"project\":\"mcp_index_type_high\",\"name_pattern\":\".*\",\"limit\":5}}}");
+    ASSERT_NOT_NULL(q_alias_amb);
+    ASSERT_NOT_NULL(strstr(q_alias_amb, "not found"));
+    free(q_alias_amb);
+
     cbm_mcp_server_free(srv);
 
     /* ── cleanup ───────────────────────────────────────────────────── */
@@ -4146,11 +4194,17 @@ TEST(tool_resolve_store_by_internal_name_issue704) {
         cbm_unsetenv("CBM_CACHE_DIR");
     }
     char a_path[700];
+    char b2_path[700];
+    char stale_path[700];
     snprintf(a_path, sizeof(a_path), "%s/alpha704.db", cache);
+    snprintf(b2_path, sizeof(b2_path), "%s/beta704b.db", cache);
+    snprintf(stale_path, sizeof(stale_path), "%s/stale704.db", cache);
     char corrupt_path[720];
     snprintf(corrupt_path, sizeof(corrupt_path), "%s.corrupt", ghost_path);
     cbm_unlink(a_path);
     cbm_unlink(gamma_path);
+    cbm_unlink(b2_path);
+    cbm_unlink(stale_path);
     cbm_unlink(ghost_path);
     cbm_unlink(corrupt_path); /* ghost may be quarantined by resolve_store */
     char side[740];
@@ -4162,6 +4216,20 @@ TEST(tool_resolve_store_by_internal_name_issue704) {
     cbm_unlink(side);
     snprintf(side, sizeof(side), "%s-shm", gamma_path);
     cbm_unlink(side);
+    snprintf(side, sizeof(side), "%s-wal", b2_path);
+    cbm_unlink(side);
+    snprintf(side, sizeof(side), "%s-shm", b2_path);
+    cbm_unlink(side);
+    snprintf(side, sizeof(side), "%s-wal", stale_path);
+    cbm_unlink(side);
+    snprintf(side, sizeof(side), "%s-shm", stale_path);
+    cbm_unlink(side);
+    cbm_rmdir(root_alpha);
+    cbm_rmdir(root_beta);
+    char other_dir[700];
+    snprintf(other_dir, sizeof(other_dir), "%s/other", cache);
+    cbm_rmdir(root_beta2);
+    cbm_rmdir(other_dir);
     cbm_rmdir(cache);
     PASS();
 }

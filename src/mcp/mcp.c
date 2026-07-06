@@ -767,18 +767,23 @@ static char *canonicalize_repo_path_if_exists(char *repo_path) {
     return repo_path;
 }
 
+static char *resolve_project_arg_alias(char *project);
+
 static char *normalize_project_arg(char *project) {
-    if (!project || (!strchr(project, '/') && !strchr(project, '\\'))) {
-        return project;
+    if (!project) {
+        return NULL;
+    }
+    if (!strchr(project, '/') && !strchr(project, '\\')) {
+        return resolve_project_arg_alias(project);
     }
 
     project = canonicalize_repo_path_if_exists(project);
     char *normalized = cbm_project_name_from_path(project);
     if (normalized) {
         free(project);
-        return normalized;
+        project = normalized;
     }
-    return project;
+    return resolve_project_arg_alias(project);
 }
 
 /* Resolve the project argument, accepting the canonical "project" key plus the
@@ -1291,6 +1296,78 @@ static bool db_internal_project_name(const char *full_path, char *name_out, size
 }
 
 /* resolve_store_fallback_scan — see forward declaration above resolve_store. */
+static const char *project_path_basename(const char *path) {
+    if (!path || !*path) {
+        return path;
+    }
+    const char *end = path + strlen(path);
+    while (end > path && (end[-1] == '/' || end[-1] == '\\')) {
+        end--;
+    }
+    const char *base = end;
+    while (base > path && base[-1] != '/' && base[-1] != '\\') {
+        base--;
+    }
+    return base;
+}
+
+static char *resolve_project_arg_alias(char *project) {
+    if (!project || strchr(project, '/') || strchr(project, '\\')) {
+        return project;
+    }
+
+    char dir_path[CBM_SZ_1K];
+    cache_dir(dir_path, sizeof(dir_path));
+    cbm_dir_t *d = cbm_opendir(dir_path);
+    if (!d) {
+        return project;
+    }
+
+    int alias_matches = 0;
+    char alias_name[CBM_SZ_1K] = "";
+    cbm_dirent_t *entry;
+    while ((entry = cbm_readdir(d)) != NULL) {
+        const char *n = entry->name;
+        size_t len = strlen(n);
+        if (!is_project_db_file(n, len)) {
+            continue;
+        }
+        char full_path[CBM_SZ_2K];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, n);
+        char iname[CBM_SZ_1K];
+        cbm_store_t *st = NULL;
+        if (!db_internal_project_name(full_path, iname, sizeof(iname), &st)) {
+            continue;
+        }
+        if (strcmp(iname, project) == 0) {
+            cbm_store_close(st);
+            cbm_closedir(d);
+            return project;
+        }
+
+        cbm_project_t proj = {0};
+        if (cbm_store_get_project(st, iname, &proj) == CBM_STORE_OK && proj.root_path) {
+            const char *base = project_path_basename(proj.root_path);
+            if (base && strcmp(base, project) == 0) {
+                alias_matches++;
+                snprintf(alias_name, sizeof(alias_name), "%s", iname);
+            }
+            cbm_project_free_fields(&proj);
+        }
+        cbm_store_close(st);
+        if (alias_matches > 1) {
+            break;
+        }
+    }
+    cbm_closedir(d);
+
+    if (alias_matches == 1 && alias_name[0]) {
+        free(project);
+        return heap_strdup(alias_name);
+    }
+    return project;
+}
+
 static cbm_store_t *resolve_store_fallback_scan(const char *project) {
     char dir_path[CBM_SZ_1K];
     cache_dir(dir_path, sizeof(dir_path));
@@ -1352,12 +1429,35 @@ static void build_project_json_entry(yyjson_mut_doc *doc, yyjson_mut_val *arr, c
         }
         cbm_project_free_fields(&proj);
     }
-    cbm_store_close(pstore);
+
+    cbm_git_context_t ctx = {0};
+    (void)cbm_git_context_resolve(root_path_buf[0] ? root_path_buf : NULL, &ctx);
+    if (root_path_buf[0] && !ctx.root_exists) {
+        cbm_git_context_free(&ctx);
+        cbm_store_close(pstore);
+        return;
+    }
 
     yyjson_mut_val *p = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_strcpy(doc, p, "name", project_name);
     yyjson_mut_obj_add_strcpy(doc, p, "root_path", root_path_buf);
-    add_git_context_json(doc, p, root_path_buf[0] ? root_path_buf : NULL);
+    yyjson_mut_val *git = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_bool(doc, git, "is_git", ctx.is_git);
+    yyjson_mut_obj_add_bool(doc, git, "is_worktree", ctx.is_worktree);
+    yyjson_mut_obj_add_bool(doc, git, "is_detached", ctx.is_detached);
+    yyjson_mut_obj_add_bool(doc, git, "root_exists", ctx.root_exists);
+    add_git_context_string(doc, git, "worktree_root", ctx.worktree_root);
+    add_git_context_string(doc, git, "git_dir", ctx.git_dir);
+    add_git_context_string(doc, git, "git_common_dir", ctx.git_common_dir);
+    add_git_context_string(doc, git, "canonical_root", ctx.canonical_root);
+    add_git_context_string(doc, git, "branch", ctx.branch);
+    add_git_context_string(doc, git, "branch_slug", ctx.branch_slug);
+    add_git_context_string(doc, git, "head_sha", ctx.head_sha);
+    add_git_context_string(doc, git, "base_sha", ctx.base_sha);
+    yyjson_mut_obj_add_val(doc, p, "git", git);
+    cbm_git_context_free(&ctx);
+    cbm_store_close(pstore);
+
     yyjson_mut_obj_add_int(doc, p, "nodes", nodes);
     yyjson_mut_obj_add_int(doc, p, "edges", edges);
     yyjson_mut_obj_add_int(doc, p, "size_bytes", size_bytes);
@@ -5962,12 +6062,13 @@ static bool mcp_usage_key_is_secret(const char *key) {
 
 static bool mcp_usage_key_is_allowed(const char *key) {
     static const char *allowed[] = {"project",        "project_name", "query",
-                                    "name_pattern",   "qn_pattern",   "qualified_name",
-                                    "function_name",  "label",        "relationship",
-                                    "mode",           "depth",        "limit",
-                                    "offset",         "direction",    "path",
-                                    "file_pattern",   "path_filter",  "since",
-                                    "base_branch",    "repo_path",    "persistence"};
+                                    "pattern",        "name_pattern", "qn_pattern",
+                                    "qualified_name", "function_name", "label",
+                                    "relationship",   "mode",         "depth",
+                                    "limit",          "offset",       "direction",
+                                    "path",           "file_pattern", "path_filter",
+                                    "since",          "base_branch",  "repo_path",
+                                    "persistence"};
     if (!key) {
         return false;
     }
